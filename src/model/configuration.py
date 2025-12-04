@@ -465,6 +465,26 @@ class SensitivitySetup:
         except (StopIteration, TypeError):
             raise StopIteration("All scenarios have been processed")
 
+    def to_info_df(self) -> pd.DataFrame:
+        def to_series(tpl, offset: int = 0):
+            idx = pd.Index(["#", "n_sensors", "acc", "rgh", "dem"])
+
+            i, p, a, r, d = tpl
+
+            _n = 0
+            for k, v in p.items():
+                _n += len(v)
+
+            return pd.Series([i+offset, _n, a, r, d], index=idx)
+
+        l = []
+
+        for tpl in self:
+            l.append(to_series(tpl))
+
+        return pd.concat(l, axis=1).T.reset_index(drop=True).set_index("#")
+
+
     def to_json(self, fp: os.PathLike):
         from dataclasses import asdict
 

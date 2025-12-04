@@ -17,8 +17,13 @@ logs/**/*
 
 **/cusum/data
 
+**/networks/**/*
+
 # notebooks
 *.ipynb
+
+# parquets
+*.parquet
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
