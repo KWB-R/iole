@@ -139,6 +139,12 @@ class Options:
             self.demand_perturbation_frequency >= 0
         ), f"Base demand update frequency has to be greater than 0 (is {self.demand_perturbation_frequency})."
 
+        print(f"Options loaded:\n")
+        print(f"Demand perturbation mode is: {self.demand_perturbation_method}\n")
+        print(f"Inflow replacement map: {self.inflow_replacement_mapping}\n")
+        print(f"Pump IDs: {self.pump_ids}\n")
+        print(f"Flow IDs: {self.flow_pipe_ids}\n")
+
     def __repr__(self):
         return pformat(self.__dict__)
 
@@ -319,6 +325,7 @@ class SensitivitySetup:
         self._iterator = None
 
         if self.discrete_df is not None:
+            print(self.discrete_df)
             assert all(
                 n in self.discrete_df.columns
                 for n in ["demand", "roughness", "measurement"]
@@ -487,7 +494,7 @@ class SensitivitySetup:
                 converted_scenarios[key] = v
             data["placement_scenarios"] = converted_scenarios
 
-        if "discrete_df" in data:
+        if data.get("discrete_df", None):
             data["discrete_df"] = pd.DataFrame.from_dict(data["discrete_df"])
 
         return cls(**data)
