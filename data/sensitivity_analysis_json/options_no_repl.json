@@ -1,0 +1,58 @@
+{
+  "flow_pipe_ids": [
+    "p227",
+    "p235",
+    "p239"
+  ],
+  "pump_ids": [
+    "PUMP_1"
+  ],
+  "inflow_replacement_mapping": {},
+  "perturbation_mode": {
+    "demand": "uniform",
+    "measurement": "uniform",
+    "roughness": "uniform"
+  },
+  "perturated_measurements": {
+    "head": true,
+    "inflow": false,
+    "pump_flow": false
+  },
+  "sensor_accuracy_multiplier": 1,
+  "roughness_multiplier": 1,
+  "demand_multiplier": 1,
+  "sensor_accuracy_noise": 0,
+  "roughness_noise": 0,
+  "demand_noise": 0,
+  "cusum_multiplier": 1,
+  "head_rounding_decimals": 2,
+  "use_dual_model_correction": false,
+  "run_cusum": false,
+  "aggregate_virtual_flows": true,
+  "save_virtual_flows": true,
+  "save_sensitivity_parameter_json": true,
+  "rng_seed": 42,
+  "max_simulation_time": null,
+  "correction_period": {
+    "__type__": "Timedelta",
+    "value": "P6DT23H59M59.999999999S"
+  },
+  "calibration_week": 1,
+  "timedelta_to_datetime_conversion_date": {
+    "__type__": "Timestamp",
+    "value": "2019-01-01T00:00:00"
+  },
+  "excluded_elements": {
+    "nodes": [
+      "PUMP_1",
+      "n347",
+      "n1",
+      "n4",
+      "n25"
+    ],
+    "links": []
+  },
+  "keep_results": false,
+  "keep_workers": false,
+  "delete_worker_models": true
+}
