@@ -22,6 +22,8 @@ logs/**/*
 # notebooks
 *.ipynb
 
+*.pdf
+
 # parquets
 *.parquet
 

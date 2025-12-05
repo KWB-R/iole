@@ -6,6 +6,7 @@ import tempfile
 from itertools import count
 from collections import defaultdict
 from pathlib import Path
+from uuid import uuid4
 
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Literal, Any, Never, Tuple, ClassVar
@@ -25,12 +26,6 @@ SimulationTargets = Dict[SimulationKind, List[str]]
 VIRTUAL_FLOW_PATTERN_NAME = "virtual_flow"
 
 __DEBUG = True
-__DEBUG_INP_PATH = str(
-    Path(
-        r"C:\Users\jkoslo\Documents\iOLE (lok)\programming\iole_kwb\iole\data\temp\debug\debug.inp"
-    )
-)
-
 
 def _to_offset(s: str) -> Tuple[bool, pd.DateOffset]:
     try:
@@ -48,7 +43,7 @@ def assign_perturbated_patterns(
     seed: int = 42,
     skip_nodes: list[str] | None = None,
     skip_constant_patterns: bool = True,
-) -> epanet:
+):
     """
     d: epanet instance
     n: number of generated patterns
@@ -126,7 +121,7 @@ def assign_perturbated_patterns(
             )
 
     if __DEBUG:
-        d.saveInputFile(__DEBUG_INP_PATH)
+        d.saveInputFile(f"{str(uuid4())}.inp")
 
 
 @dataclass(frozen=True)

@@ -1,19 +1,17 @@
 from pathlib import Path
 
 import polars as pl
-import pyarrow.parquet as pq
 
 def merge_parquet_series(pathes: list[Path], out_path: Path):
-    # First file: convert index to datetime and rename data column
+    #First file: convert index to datetime and rename data column
     lfs = [
         pl.scan_parquet(pathes[0])
         .with_columns(pl.col("__index_level_0__").cast(pl.Duration).alias("datetime"))
         .drop("__index_level_0__")
-
         .rename({"0": pathes[0].stem.split("_")[-1]})
     ]
 
-    # Rest: drop index (we already have it from first file), keep renamed data column
+    #Rest: drop index
     for file in pathes[1:]:
         s = (
             pl.scan_parquet(file)
@@ -34,6 +32,9 @@ def merge_result_folder(result_folder_path: Path,
     parquet_files = []
     for f in result_folders:
         parquet_files.extend([p for p in f.rglob("*.parquet")])
+
+    # sort path order
+    parquet_files.sort(key=lambda x: int(x.stem.split("_")[-1]))
 
     # 1. merge parquet files
     merge_parquet_series(parquet_files, data_out_path)

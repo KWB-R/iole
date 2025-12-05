@@ -19,9 +19,9 @@ from .network_simulation import (
     PatternPertArgs,
 )
 
-## SUPER IMPORTANT MONKEY PATCH ########################################
+## SUPER IMPORTANT MONKEY PATCH INCLUDED AT MODULE LEVEL ##############
 import src.util.oopnet_patch
-########################################################################
+#######################################################################
 
 
 # decorators to track if changes to network were saved
