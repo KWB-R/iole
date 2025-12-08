@@ -325,7 +325,6 @@ class SensitivitySetup:
         self._iterator = None
 
         if self.discrete_df is not None:
-            print(self.discrete_df)
             assert all(
                 n in self.discrete_df.columns
                 for n in ["demand", "roughness", "measurement"]
