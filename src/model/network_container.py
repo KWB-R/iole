@@ -4,45 +4,21 @@ from copy import deepcopy
 
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, ClassVar, Callable, Literal, Self, Dict, Any
-from functools import wraps
+import tempfile
 
 import pandas as pd
 import numpy as np
 import oopnet as on
-import networkx as nx
 
 from .configuration import ARTIFICIAL_LEAK_PREFIX, SPLIT_PIPE_SUFFIX
 from .network_simulation import (
     Simulator,
     SimulationTargets,
-    DynBaseDemandPertArgs,
-    PatternPertArgs,
 )
 
 ## SUPER IMPORTANT MONKEY PATCH INCLUDED AT MODULE LEVEL ##############
 import src.util.oopnet_patch
 #######################################################################
-
-
-# decorators to track if changes to network were saved
-def set_unsaved(func):
-    @wraps(func)
-    def inner(self: HydraulicNetwork, *args, **kwargs):
-        result = func(self, *args, **kwargs)
-        self._changes_saved = False
-        return result
-
-    return inner
-
-
-def set_saved(func):
-    @wraps(func)
-    def inner(self: HydraulicNetwork, *args, **kwargs):
-        result = func(self, *args, **kwargs)
-        self._changes_saved = True
-        return result
-
-    return inner
 
 
 @dataclass
@@ -164,23 +140,15 @@ class VirtualReservoir:
 @dataclass
 class HydraulicNetwork:
 
-    source_path: os.PathLike
-
-    _leak_nodes: List[str] = field(default_factory=list, init=False)
-
-    _changes_saved: bool = field(default=False, init=False)  # toggled by decorator
-    _most_recent_path: os.PathLike = field(
-        default=None, init=False
-    )  # set in .save method
+    source_path: os.PathLike | None = field(default=None)
+    nw: on.Network | None = field(default=None)
 
     def __post_init__(self):
-        self.nw = on.Network.read(self.source_path)
-        self._most_recent_path = self.source_path
+        if (self.source_path is None) and (self.nw is None):
+            raise ValueError("One of on.Network or a path to an inp-file has to be provided.")
 
-    @property
-    def inp_path(self):
-        """Returns path to most recently saved inp file"""
-        return self._most_recent_path
+        if self.source_path:
+            self.nw = on.Network.read(self.source_path)
 
     @property
     def max_pattern_steps(self):
@@ -203,11 +171,8 @@ class HydraulicNetwork:
     def copy(self) -> HydraulicNetwork:
         return deepcopy(self)
 
-    @set_saved
-    def save(self, path) -> None:
+    def save(self, path):
         self.nw.write(path)
-        self._most_recent_path = path
-        return self._most_recent_path
 
     def export_simulation_slice(
         self, start: Optional[pd.Timedelta] = None, end: Optional[pd.Timedelta] = None
@@ -222,7 +187,6 @@ class HydraulicNetwork:
 
         return new_instance
 
-    @set_unsaved
     def set_pattern_df(
         self, df: pd.DataFrame, mode: Literal["full", "update"] = "full"
     ):
@@ -290,7 +254,6 @@ class HydraulicNetwork:
 
         return self
 
-    @set_unsaved
     def transform_base_demands(
         self, func: Callable, node_list: Optional[List[str]] = None
     ) -> None:
@@ -342,7 +305,6 @@ class HydraulicNetwork:
 
         return df
 
-    @set_unsaved
     def replace_reservoir_or_tank_with_emitter_node(
         self,
         reservoir_or_tank_id: str,
@@ -472,7 +434,6 @@ class HydraulicNetwork:
 
             self.nw.controls = controls_to_keep
 
-    @set_unsaved
     def add_leaks(self, *leaks: pd.Series):
         if not leaks:
             return None
@@ -583,7 +544,6 @@ class HydraulicNetwork:
         else:
             print(f"Node '{leak_node_id}' already in network, no leak inserted.")
 
-    @set_unsaved
     def remove_artificial_leaks(self):
         for ln in self._leak_nodes:
             # remove elements
@@ -603,7 +563,6 @@ class HydraulicNetwork:
 
         self._leak_nodes = []
 
-    @set_unsaved
     def split_area_at_pump(self, pump_id, substitute_demand_pattern: pd.Series):
         # get pump
         pump = on.get_pump(self.nw, pump_id)
@@ -659,20 +618,27 @@ class HydraulicNetwork:
 
         on.add_pipe(self.nw, new_pipe)
 
-    @set_unsaved
-    def add_virtual_reservoirs(
+    def to_dual_model(
         self, *node_names: List[str]
-    ) -> Tuple[List[str], List[str]]:
+    ) -> _DualModel:
         """
         Returns ids of
             <VP> VN <VP2>
         """
+        nw_copy = deepcopy(self.nw)
 
-        vrids, vpids = VirtualReservoir.add(self.nw, *node_names)
+        vrids, vpids = VirtualReservoir.add(nw_copy, *node_names)
 
-        return vrids, vpids
+        dm = _DualModel(
+            source_path=None,
+            nw=nw_copy,
+            virtual_pipes=vpids,
+            virtual_reservoirs=vrids,
+        )
 
-    @set_unsaved
+        return dm
+
+
     def set_patterns(self, patterns: pd.DataFrame, overwrite: bool = True):
         """Set and add or just add patterns"""
         _patterns = on.get_pattern_ids(self.nw)
@@ -689,7 +655,7 @@ class HydraulicNetwork:
                 _pattern = on.Pattern(name, multipliers=data)
                 on.add_pattern(self.nw, _pattern)
 
-    def export_base_demands(self) -> pd.DataFrame:
+    def __export_base_demands(self) -> pd.DataFrame:
         demands = {}
 
         for node in on.get_junctions(self.nw):
@@ -697,8 +663,7 @@ class HydraulicNetwork:
 
         return pd.DataFrame.from_dict(demands, orient="index")
 
-    @set_unsaved
-    def import_base_demands(
+    def __import_base_demands(
         self, base_demands: pd.DataFrame, exclude: List[str] = None
     ) -> None:
         if exclude is None:
@@ -707,7 +672,7 @@ class HydraulicNetwork:
             if nid not in exclude:
                 on.get_node(self.nw, nid).demand = bdm.to_list()
 
-    def export_roughness(self) -> pd.DataFrame:
+    def __export_roughness(self) -> pd.DataFrame:
         roughness = {}
 
         for pipe in on.get_pipes(self.nw):
@@ -715,8 +680,7 @@ class HydraulicNetwork:
 
         return pd.DataFrame.from_dict(roughness, orient="index")
 
-    @set_unsaved
-    def import_roughness(
+    def __import_roughness(
         self, roughness_df: pd.DataFrame, exclude: List[str] = None
     ) -> None:
         if exclude is None:
@@ -725,71 +689,7 @@ class HydraulicNetwork:
             if pid not in exclude:
                 on.get_pipe(self.nw, pid).roughness = rgh.values[0]
 
-    def to_networkx(self) -> nx.Graph:
-        """
-        Returns undirected Graph with nodes and edges of network
-
-        node attrs:
-        - coordinates, node_type, is_virtual
-
-        edge attrs:
-        - name, link_type, is_virtual
-
-        """
-        _nodes = on.get_nodes(self.nw)
-        _links = on.get_links(self.nw)
-
-        # create nx nodes
-        nodes = []
-        coords = {}
-        nkind = {}
-        is_node_virtual = {}
-
-        for node in _nodes:
-            nodes.append(node.id)
-            coords[node.id] = (node.xcoordinate, node.ycoordinate)
-            nkind[node.id] = type(node).__name__
-            is_node_virtual[node.id] = (
-                True if node.id.startswith(VirtualReservoir._vr_prefix) else False
-            )
-
-        # create nx edges
-        edges = []
-        edge_names = {}
-        ekind = {}
-        is_link_virtual = {}
-
-        for edge in _links:
-            tpl = (edge.startnode.id, edge.endnode.id)
-            edges.append(tpl)
-            edge_names[tpl] = edge.id
-            ekind[tpl] = type(edge).__name__
-            is_link_virtual[tpl] = (
-                True if edge.id.startswith(VirtualReservoir._vp_prefix) else False
-            )
-
-        # # create graph
-        G = nx.Graph()
-
-        # nodes
-        G.add_nodes_from(nodes)
-        nx.set_node_attributes(G, coords, "coordinates")
-        nx.set_node_attributes(G, nkind, "node_type")
-        nx.set_node_attributes(G, is_node_virtual, "is_virtual")
-
-        # edges
-        G.add_edges_from(edges)
-        nx.set_edge_attributes(G, edge_names, "name")
-        nx.set_edge_attributes(G, ekind, "link_type")
-        nx.set_edge_attributes(G, is_link_virtual, "is_virtual")
-
-        return G
-
-    def plot_topology(self):
-        # G = self.to_networkx()
-        raise NotImplementedError()
-
-    def get_sample_pipes(
+    def __get_sample_pipes(
         self,
         pctg: float,
         min_pipes: int,
@@ -821,55 +721,38 @@ class HydraulicNetwork:
         self,
         simulation_targets: SimulationTargets,
         solver_options: Optional[Dict[str, List[Any]]] = None,
-        cleanup_sim_dir: bool = True,
-        demand_perturbation_settings: (
-            DynBaseDemandPertArgs | PatternPertArgs | None
-        ) = None,
     ) -> Dict[SimulationTargets, pd.DataFrame]:
         """Run simulation using EpytSimulation class
         - retrieves most recent network inp
         - slices result if indices do not match
         """
-        path = self.inp_path
-
-        if not self._changes_saved:
-            print(
-                f"Warning! Recent changes not saved to inp-file, running simulation of latest saved state\n\t{path}."
-            )
 
         simulator = Simulator(solver_options=solver_options)
 
-        result = simulator.run_simulation(
-            inp_path=path,
-            simulation_targets=simulation_targets,
-            cleanup=cleanup_sim_dir,
-            demand_perturbation_settings=demand_perturbation_settings,
-        )
-
-        if len(result) != self.max_pattern_steps:
-            pidx = self.pattern_index
-            for k, v in result.items():
-                r = result[k]
-
-                # workaround if duration is shortened in simulator
-                if (solver_options is None) or (
-                    not "setTimeSimulationDuration" in solver_options.keys()
-                ):
-                    r = v.loc[pidx]
-                else:
-                    r = v.loc[
-                        : pd.Timedelta(
-                            seconds=solver_options["setTimeSimulationDuration"][0]
-                        )
-                    ]
-
-                result[k] = r
+        with tempfile.TemporaryDirectory() as tdir:
+            tpath = os.path.join(tdir, "dual_model.inp")
+            self.save(tpath)
+            result = simulator.run_simulation(
+                inp_path=tpath,
+                simulation_targets=simulation_targets,
+                cleanup=True,
+            )
 
         return result
+
+
+@dataclass
+class _DualModel(HydraulicNetwork):
+
+    virtual_reservoirs: list[str]
+    virtual_pipes: list[str]
 
     def run_localisation(
         self,
         leak_flow: pd.Series,
+        heads: pd.DataFrame,
+        inflows: pd.DataFrame,
         temporal_resolution: Optional[str | pd.DateOffset] = None,
         pipe_list: Optional[list[str]] = None,
-    ) -> dict[str, pd.Series | pd.DataFrame]: ...
+    ) -> dict[str, pd.Series | pd.DataFrame]:
+        raise NotImplementedError("Localisation not yet implemented.")
