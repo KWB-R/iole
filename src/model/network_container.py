@@ -20,7 +20,7 @@ from .network_simulation import (
 )
 
 ## SUPER IMPORTANT MONKEY PATCH INCLUDED AT MODULE LEVEL ##############
-import _src.util.oopnet_patch
+import src.util.oopnet_patch
 #######################################################################
 
 
