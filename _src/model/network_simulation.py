@@ -16,7 +16,7 @@ import numpy as np
 
 from epyt import epanet
 
-from src.util import timer
+from _src.util import timer
 
 
 SimulationKind = Literal["head", "pressure", "flow", "pump_flow"]
