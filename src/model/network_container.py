@@ -3,21 +3,28 @@ import os
 from copy import deepcopy
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple, ClassVar, Callable, Literal, Self, Dict, Any
+from typing import List, Optional, Tuple, ClassVar, Literal, Self, Dict, Any
 import tempfile
 
 import pandas as pd
 import numpy as np
 import oopnet as on
 
-from .configuration import ARTIFICIAL_LEAK_PREFIX, SPLIT_PIPE_SUFFIX
+from .configuration import (
+    ARTIFICIAL_LEAK_PREFIX,
+    SPLIT_PIPE_SUFFIX,
+    SUBSTITUTE_PUMP_LINK_PREFIX,
+)
 from .network_simulation import (
     Simulator,
     SimulationTargets,
 )
 
+from ..util.data_processing import wrap_cyclic_patterns
+
 ## SUPER IMPORTANT MONKEY PATCH INCLUDED AT MODULE LEVEL ##############
 import src.util.oopnet_patch
+
 #######################################################################
 
 
@@ -29,10 +36,9 @@ class VirtualReservoir:
 
     _vr_prefix: ClassVar[str] = "vr_"  # virtual reservoirs
     _vp_prefix: ClassVar[str] = "vp_"  # virtual pipes from sensor to VN
-    _vn_prefix: ClassVar[str] = "vn_"  # virtual nodes
     _flow_corr_pattern_suffix: ClassVar[str] = "_flow_corr"  # flow corr patterns
 
-    REGISTRY: ClassVar[List[VirtualReservoir]] = {}
+    REGISTRY: ClassVar[dict[str, VirtualReservoir]] = {}
 
     # new in nw
     connected_node_id: str
@@ -52,12 +58,14 @@ class VirtualReservoir:
 
     @property
     def flow_corr_pat_id(self):
-        return f"{self.connected_node_id}{self._flow_corr_pattern_suffix}"
+        return f"{self._vr_prefix}{self.connected_node_id}{self._flow_corr_pattern_suffix}"
+
+    @property
+    def head_pat_id(self):
+        return f"{self.connected_node_id}"
 
     @classmethod
-    def add(
-        cls, nw: on.Network, *connected_nodes: str
-    ) -> Tuple[on.Network, List[str], List[str]]:
+    def add(cls, nw: on.Network, *connected_nodes: str) -> Tuple[List[str], List[str]]:
 
         vrids = []
         vpids = []
@@ -143,12 +151,21 @@ class HydraulicNetwork:
     source_path: os.PathLike | None = field(default=None)
     nw: on.Network | None = field(default=None)
 
+    base_patterns: pd.DataFrame | None = field(default=None)
+    pump_demands: list[str] = field(default_factory=list, init=False)
+    inflow_pipes: list[str] = field(default_factory=list, init=True)
+
     def __post_init__(self):
         if (self.source_path is None) and (self.nw is None):
-            raise ValueError("One of on.Network or a path to an inp-file has to be provided.")
+            raise ValueError(
+                "One of on.Network or a path to an inp-file has to be provided."
+            )
 
         if self.source_path:
             self.nw = on.Network.read(self.source_path)
+
+        if self.base_patterns is None:
+            self.base_patterns = self.get_pattern_df()
 
     @property
     def max_pattern_steps(self):
@@ -167,6 +184,11 @@ class HydraulicNetwork:
         pstarttime = pd.Timedelta(self.nw.times.patternstart)
 
         return pd.timedelta_range(pstarttime, periods=lmax, freq=ptimestep)
+
+    def check_pattern_compatibility(self, duration_assumption: pd.Timedelta):
+        dur = self.max_pattern_steps * pd.Timedelta(self.nw.times.patterntimestep)
+        if dur != duration_assumption:
+            raise ValueError(f"Pattern duration does not match assumed cycle length.")
 
     def copy(self) -> HydraulicNetwork:
         return deepcopy(self)
@@ -253,25 +275,6 @@ class HydraulicNetwork:
                 on.add_pattern(self.nw, pattern)
 
         return self
-
-    def transform_base_demands(
-        self, func: Callable, node_list: Optional[List[str]] = None
-    ) -> None:
-        """Transforms all base demands with the provided function
-        func: f(x) -> x*
-        """
-
-        _nl = on.get_junction_ids(self.nw) if node_list is None else node_list
-
-        for node in on.get_junctions(self.nw):
-            if node.id in _nl:
-                if isinstance(node.demand, list):
-                    new_demands = [func(d) for d in node.demand]
-                    node.demand = new_demands
-                elif isinstance(node.demand, float):
-                    node.demand = func(node.demand)
-                else:
-                    print(f"No base demand information for {node.id}.")
 
     def get_pattern_df(self) -> pd.DataFrame:
         patterns = on.get_patterns(self.nw)
@@ -434,137 +437,19 @@ class HydraulicNetwork:
 
             self.nw.controls = controls_to_keep
 
-    def add_leaks(self, *leaks: pd.Series):
-        if not leaks:
-            return None
-
-        pipe_ids = on.get_pipe_ids(self.nw)
-        pidx = self.pattern_index
-        pfreq = pd.Timedelta(pidx.freq)
-
-        for l in leaks:
-            if l.name not in pipe_ids:
-                print(f"{l.name} not found in network pipe ids, skipping.")
-                continue
-
-            if not isinstance(l.index, pd.TimedeltaIndex):
-                print(f"Index of {l.name} is not pd.TimedeltaIndex, skipping.")
-                continue
-
-            lfreq = (
-                pd.Timedelta(l.index.freq)
-                if l.index.freq is not None
-                else pd.Timedelta(pd.infer_freq(l.index))
-            )
-            if lfreq is None:
-                print(f"Freq of {l.name} is not None, skipping.")
-                continue
-
-            if lfreq != pfreq:
-                print(
-                    f"Freq of {l.name} ({lfreq}) does not match pattern freq ({pfreq}), skipping."
-                )
-                continue
-
-            if len(pidx) > len(l):
-                _l = l.copy().reindex(pidx).fillna(0)
-            else:
-                _l = l.copy()
-
-            self._insert_leak(_l)
-
-        # adjust sim time
-        new_sim_duration = self.max_pattern_steps * pfreq
-        self.nw.times.duration = new_sim_duration
-
-        return self
-
-    def _insert_leak(self, leak: pd.Series):
-
-        leak_node_id = f"{ARTIFICIAL_LEAK_PREFIX}{leak.name}"
-        split_pipe_name = f"{leak.name}{SPLIT_PIPE_SUFFIX}"
-
-        if leak_node_id not in on.get_node_ids(self.nw):
-            try:
-
-                leak_pipe = on.get_pipe(self.nw, leak.name)
-                sn, en = leak_pipe.startnode, leak_pipe.endnode
-
-                # add pattern
-                new_pattern = on.Pattern(id=leak_node_id, multipliers=leak.values)
-                on.add_pattern(self.nw, new_pattern)
-
-                # define leak node
-                leak_node = on.Junction(
-                    id=leak_node_id,
-                    elevation=(sn.elevation + en.elevation) / 2,
-                    demand=1,
-                    demandpattern=on.Pattern(leak_node_id),
-                    xcoordinate=(sn.xcoordinate + en.xcoordinate) / 2,
-                    ycoordinate=(sn.ycoordinate + en.ycoordinate) / 2,
-                )
-                on.add_junction(self.nw, leak_node)
-
-                # reconnect old pipe
-                leak_pipe.endnode = leak_node
-                leak_pipe.length /= 2
-
-                # define new pipe
-                new_pipe = on.Pipe(
-                    id=split_pipe_name,
-                    length=leak_pipe.length,
-                    diameter=leak_pipe.diameter,
-                    roughness=leak_pipe.roughness,
-                    minorloss=leak_pipe.minorloss,
-                    startnode=leak_node,
-                    endnode=en,
-                )
-
-                # add new pipe
-                on.add_pipe(self.nw, new_pipe)
-
-                # save leak_node props
-                self._leak_nodes.append(
-                    {
-                        "node_id": leak_node.id,
-                        "original_pipe": {
-                            "id": leak.name,
-                            "start_node": sn,
-                            "end_node": en,
-                        },
-                        "split_pipe": {"id": split_pipe_name},
-                    }
-                )
-
-                print(f"Inserted leak at node id '{leak_node_id}'.")
-
-            except Exception as e:
-                raise e
-
-        else:
-            print(f"Node '{leak_node_id}' already in network, no leak inserted.")
-
-    def remove_artificial_leaks(self):
-        for ln in self._leak_nodes:
-            # remove elements
-            on.remove_node(self.nw, ln["node_id"])
-            on.remove_pipe(self.nw, ln["split_pipe"]["id"])
-
-            # reconnect original pipe
-            original_pipe = on.get_pipe(self.nw, ln["original_pipe"]["id"])
-            original_pipe.length = original_pipe.length * 2
-            original_pipe.startnode = ln["original_pipe"]["start_node"]
-            original_pipe.endnode = ln["original_pipe"]["end_node"]
-
-            # remove leakage pattern
-            self.nw._patterns.pop(
-                f"{ARTIFICIAL_LEAK_PREFIX}{ln["original_pipe"]["id"]}", None
-            )
-
-        self._leak_nodes = []
-
-    def split_area_at_pump(self, pump_id, substitute_demand_pattern: pd.Series):
+    def split_area_at_pump(self, pump_id, substitute_demand_pattern: pd.Series | str):
+        # sets empty pattern multipliers if pattern is str
         # get pump
+
+        if isinstance(substitute_demand_pattern, pd.Series):
+            pname = substitute_demand_pattern.name
+            pvalues = substitute_demand_pattern.values
+        elif isinstance(substitute_demand_pattern, str):
+            pname = substitute_demand_pattern
+            pvalues = [1]
+        else:
+            raise TypeError(f"Invalid argument {substitute_demand_pattern}.")
+
         pump = on.get_pump(self.nw, pump_id)
 
         pump_x = (pump.startnode.xcoordinate + pump.endnode.xcoordinate) / 2
@@ -582,15 +467,15 @@ class HydraulicNetwork:
 
         # add substitute demand pattern
         new_pattern = on.Pattern(
-            id=substitute_demand_pattern.name,
-            multipliers=substitute_demand_pattern.values,
+            id=pname,
+            multipliers=pvalues,
         )
 
         on.add_pattern(self.nw, new_pattern)
 
         # add substitute node
         new_node = on.Junction(
-            id=substitute_demand_pattern.name,
+            id=pname,
             elevation=pump.startnode.elevation,
             xcoordinate=pump_x,
             ycoordinate=pump_y - 5,
@@ -608,7 +493,7 @@ class HydraulicNetwork:
         pump.startnode = new_reservoir
 
         new_pipe = on.Pipe(
-            id=f"p_{substitute_demand_pattern.name}",
+            id=f"{SUBSTITUTE_PUMP_LINK_PREFIX}{pname}",
             startnode=old_pump_startnode,
             endnode=new_node,
             length=1,
@@ -617,27 +502,32 @@ class HydraulicNetwork:
         )
 
         on.add_pipe(self.nw, new_pipe)
+        self.pump_demands.append(pump_id)
 
-    def to_dual_model(
-        self, *node_names: List[str]
-    ) -> _DualModel:
-        """
-        Returns ids of
-            <VP> VN <VP2>
-        """
+    def to_dual_model(self, node_names: List[str]) -> _DualModel:
+
         nw_copy = deepcopy(self.nw)
 
-        vrids, vpids = VirtualReservoir.add(nw_copy, *node_names)
+        vrs, vps = VirtualReservoir.add(nw_copy, *node_names)
 
         dm = _DualModel(
             source_path=None,
             nw=nw_copy,
-            virtual_pipes=vpids,
-            virtual_reservoirs=vrids,
+            virtual_pipes=vps,
+            virtual_reservoirs=vrs,
+            base_patterns=self.base_patterns,
         )
 
         return dm
 
+    def set_pattern_series(self, pattern_series: pd.Series):
+        name = pattern_series.name
+        if name in on.get_pattern_ids(self.nw):
+            pattern = on.get_pattern(self.nw, name)
+            pattern.multipliers = pattern_series.values
+        else:
+            pattern = on.Pattern(id=name, multipliers=pattern_series.values)
+            on.add_pattern(self.nw, pattern)
 
     def set_patterns(self, patterns: pd.DataFrame, overwrite: bool = True):
         """Set and add or just add patterns"""
@@ -655,67 +545,25 @@ class HydraulicNetwork:
                 _pattern = on.Pattern(name, multipliers=data)
                 on.add_pattern(self.nw, _pattern)
 
-    def __export_base_demands(self) -> pd.DataFrame:
-        demands = {}
+    def get_pattern_dict(self) -> dict[str, pd.Series]:
+        return {
+            p.id: pd.Series(p.multipliers).rename(p.id)
+            for p in on.get_patterns(self.nw)
+        }
 
-        for node in on.get_junctions(self.nw):
-            demands[node.id] = np.array([node.demand]).flatten()
-
-        return pd.DataFrame.from_dict(demands, orient="index")
-
-    def __import_base_demands(
-        self, base_demands: pd.DataFrame, exclude: List[str] = None
-    ) -> None:
-        if exclude is None:
-            exclude = []
-        for nid, bdm in base_demands.replace(np.nan, 0).iterrows():
-            if nid not in exclude:
-                on.get_node(self.nw, nid).demand = bdm.to_list()
-
-    def __export_roughness(self) -> pd.DataFrame:
-        roughness = {}
-
-        for pipe in on.get_pipes(self.nw):
-            roughness[pipe.id] = pipe.roughness
-
-        return pd.DataFrame.from_dict(roughness, orient="index")
-
-    def __import_roughness(
-        self, roughness_df: pd.DataFrame, exclude: List[str] = None
-    ) -> None:
-        if exclude is None:
-            exclude = []
-        for pid, rgh in roughness_df.iterrows():
-            if pid not in exclude:
-                on.get_pipe(self.nw, pid).roughness = rgh.values[0]
-
-    def __get_sample_pipes(
-        self,
-        pctg: float,
-        min_pipes: int,
-        seed: int = 42,
-        exclude_funcs: list[Callable] | None = None,
+    def wrap_base_patterns(
+        self, start_timestamp: pd.Timestamp, pattern_ids: list[str], start_dow: int = 0
     ):
-        """Return random pipe ids e.g. for localisation testing,
-        if no specific exclude_funcs are provided, defaults to:
-            1. no pipes that start with the vp prefix
-            2. no pipes that contain "PUMP" (L-Town-specific probably)
+        """Overwrites network patterns with wrapped base patterns
+        Does not affect base_pattern attr.
         """
+        _df = wrap_cyclic_patterns(
+            pattern_df=self.base_patterns[pattern_ids].copy(),
+            pattern_start_dayofweek=start_dow,
+            start_timestamp=start_timestamp,
+        )
 
-        if exclude_funcs is None:
-            exclude_funcs = [
-                lambda x: x.startswith((VirtualReservoir._vp_prefix)),
-                lambda x: "PUMP" in x,
-            ]
-
-        pipes = [
-            p
-            for p in on.get_pipe_ids(self.nw)
-            if not any(func(p) for func in exclude_funcs)
-        ]
-
-        n = max(min_pipes, int(pctg * len(pipes)))
-        return np.random.default_rng(seed=seed).choice(pipes, n).tolist()
+        self.set_patterns(_df, overwrite=True)
 
     def run_simulation(
         self,
@@ -723,7 +571,6 @@ class HydraulicNetwork:
         solver_options: Optional[Dict[str, List[Any]]] = None,
     ) -> Dict[SimulationTargets, pd.DataFrame]:
         """Run simulation using EpytSimulation class
-        - retrieves most recent network inp
         - slices result if indices do not match
         """
 
@@ -744,8 +591,8 @@ class HydraulicNetwork:
 @dataclass
 class _DualModel(HydraulicNetwork):
 
-    virtual_reservoirs: list[str]
-    virtual_pipes: list[str]
+    virtual_reservoirs: list[str] = field(default_factory=list)
+    virtual_pipes: list[str] = field(default_factory=list)
 
     def run_localisation(
         self,

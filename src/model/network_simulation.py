@@ -273,7 +273,7 @@ class Simulator:
         demand_perturbation_settings: (
             DynBaseDemandPertArgs | PatternPertArgs | None
         ) = None,
-    ) -> dict[str : pd.DataFrame]:
+    ) -> dict[str, pd.DataFrame]:
         """
         if epyt_nw is provided, skips reading the network
         """

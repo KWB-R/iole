@@ -16,6 +16,7 @@ import numpy as np
 
 ARTIFICIAL_LEAK_PREFIX: str = "Leak_"
 SPLIT_PIPE_SUFFIX: str = "_split"
+SUBSTITUTE_PUMP_LINK_PREFIX = "p_"
 
 PERTURBATION_MODE = Literal["uniform", "multiplier"]
 PERTURBATION_TARGET = Literal["demand", "roughness", "measurement"]

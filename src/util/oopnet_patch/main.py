@@ -20,7 +20,7 @@ def read_demands(network, block: list):
     """
 
     logger.debug("Reading demand section")
-    print(f"Modified demand reader function active.")
+    print(f"Demand read with modified demand reader.")
 
     _pattern_ids = set()
     _multipliers = defaultdict(list)
@@ -57,4 +57,4 @@ def read_demands(network, block: list):
 
 # monkey patch
 oopnet.reader.reading_modules.read_system_operation.read_demands = read_demands
-print("Monkey patch of oopnet demand reader complete.")
+print("Monkey patch to oopnet.reader.reading_modules.read_system_operation.read_demands applied.")
