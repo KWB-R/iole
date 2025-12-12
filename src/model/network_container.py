@@ -14,6 +14,7 @@ from .configuration import (
     ARTIFICIAL_LEAK_PREFIX,
     SPLIT_PIPE_SUFFIX,
     SUBSTITUTE_PUMP_LINK_PREFIX,
+    SUBSTITUTE_INFLOW_PATTERN_SUFFIX,
 )
 from .network_simulation import (
     Simulator,
@@ -34,9 +35,9 @@ class VirtualReservoir:
     on.Network = VirtualReservoir.add(on.Network, *vr_ids) works as is but it's weird syntax
     """
 
-    _vr_prefix: ClassVar[str] = "vr_"  # virtual reservoirs
-    _vp_prefix: ClassVar[str] = "vp_"  # virtual pipes from sensor to VN
-    _flow_corr_pattern_suffix: ClassVar[str] = "_flow_corr"  # flow corr patterns
+    vr_prefix: ClassVar[str] = "vr_"  # virtual reservoirs
+    vp_prefix: ClassVar[str] = "vp_"  # virtual pipes from sensor to VN
+    flow_corr_pattern_suffix: ClassVar[str] = "_flow_corr"  # flow corr patterns
 
     REGISTRY: ClassVar[dict[str, VirtualReservoir]] = {}
 
@@ -50,15 +51,17 @@ class VirtualReservoir:
 
     @property
     def vr_id(self):
-        return f"{self._vr_prefix}{self.connected_node_id}"
+        return f"{self.vr_prefix}{self.connected_node_id}"
 
     @property
     def vp_id(self):
-        return f"{self._vp_prefix}{self.connected_node_id}"
+        return f"{self.vp_prefix}{self.connected_node_id}"
 
     @property
     def flow_corr_pat_id(self):
-        return f"{self._vr_prefix}{self.connected_node_id}{self._flow_corr_pattern_suffix}"
+        return (
+            f"{self.vr_prefix}{self.connected_node_id}{self.flow_corr_pattern_suffix}"
+        )
 
     @property
     def head_pat_id(self):
@@ -94,7 +97,7 @@ class VirtualReservoir:
                 xcoordinate=connected_node.xcoordinate + 50 * np.sin(np.radians(45)),
                 ycoordinate=connected_node.ycoordinate + 50 * np.cos(np.radians(45)),
                 elevation=connected_node.elevation,
-                headpattern=on.Pattern(id=new_vr.connected_node_id),
+                headpattern=on.Pattern(id=new_vr.vr_id),
             )
 
             # Insert VR
@@ -166,6 +169,15 @@ class HydraulicNetwork:
 
         if self.base_patterns is None:
             self.base_patterns = self.get_pattern_df()
+
+    def __repr__(self):
+        return f"{type(self).__name__}: {self.nw.title or 'unnamed network'}"
+
+    def __str__(self):
+        return self.__repr__()
+
+    def _repr_pretty_(self):
+        return self.__repr__()
 
     @property
     def max_pattern_steps(self):
@@ -311,7 +323,7 @@ class HydraulicNetwork:
     def replace_reservoir_or_tank_with_emitter_node(
         self,
         reservoir_or_tank_id: str,
-        demand_pattern_series: pd.Series,
+        demand_pattern: pd.Series | str,
         pipes_to_reconnect: Optional[List[str]] = None,
     ) -> None:
         """
@@ -322,16 +334,20 @@ class HydraulicNetwork:
         delete_unconnected_components: bool will delete all components that are connected to the
                                             pipes that werent specified in pipes_to_reconnect
         """
-        assert len(demand_pattern_series) == len(
-            self.pattern_index
-        ), "Index of provided timeseries does not match general network pattern index."
+        if isinstance(demand_pattern, pd.Series):
+            assert len(demand_pattern) == len(
+                self.pattern_index
+            ), "Index of provided timeseries does not match general network pattern index."
+            values = demand_pattern.values
+        elif isinstance(demand_pattern, str):
+            values = [0]
 
         _r = on.get_node(network=self.nw, id=reservoir_or_tank_id)
 
         # make pattern
         dempat = on.Pattern(
-            id=f"{reservoir_or_tank_id}_SURROGATE_PATTERN",
-            multipliers=demand_pattern_series.values,
+            id=f"{reservoir_or_tank_id}{SUBSTITUTE_INFLOW_PATTERN_SUFFIX}",
+            multipliers=values,
         )
 
         on.add_pattern(self.nw, dempat)
@@ -565,6 +581,7 @@ class HydraulicNetwork:
 
         self.set_patterns(_df, overwrite=True)
 
+
     def run_simulation(
         self,
         simulation_targets: SimulationTargets,
@@ -594,6 +611,12 @@ class _DualModel(HydraulicNetwork):
     virtual_reservoirs: list[str] = field(default_factory=list)
     virtual_pipes: list[str] = field(default_factory=list)
 
+    correction_pattern_ids: list[str] = field(default_factory=list, init=False)
+
+    def __post_init__(self):
+        self.correction_pattern_ids = [p for p in on.get_pattern_ids(self.nw) if VirtualReservoir.flow_corr_pattern_suffix in p]
+        return super().__post_init__()
+
     def run_localisation(
         self,
         leak_flow: pd.Series,
@@ -603,3 +626,24 @@ class _DualModel(HydraulicNetwork):
         pipe_list: Optional[list[str]] = None,
     ) -> dict[str, pd.Series | pd.DataFrame]:
         raise NotImplementedError("Localisation not yet implemented.")
+
+    def get_correction_pattern_dataframe(self) -> pd.DataFrame:
+        df = pd.DataFrame({k: v for k, v in self.get_pattern_dict().items() if VirtualReservoir.flow_corr_pattern_suffix in k})
+
+        df.index = pd.timedelta_range(
+            start=pd.Timedelta(0),
+            freq=self.nw.times.patterntimestep,
+            periods=len(df))
+
+        return df
+
+    def wrap_correction_patterns(
+        self, start_timestamp: pd.Timestamp, start_dow: int = 0
+    ):
+        _df = wrap_cyclic_patterns(
+            pattern_df=self.get_correction_pattern_dataframe(),
+            start_timestamp=start_timestamp,
+            pattern_start_dayofweek=start_dow,
+        )
+
+        self.set_patterns(_df, overwrite=True)

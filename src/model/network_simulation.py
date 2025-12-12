@@ -331,7 +331,7 @@ class Simulator:
         )
 
         # initialize output
-        output = {}
+        output: dict[SimulationKind, list] = {}
         for k in simulation_targets.keys():
             output[k] = []
 

@@ -30,7 +30,7 @@ def wrap_cyclic_patterns(
     """ Wraps a cyclic pattern to have it start at start_date day of week and time """
 
     if not isinstance(start_timestamp, pd.Timestamp):
-        raise TypeError("No valid startdate provided.")
+        raise TypeError(f"No valid startdate provided (expected pd.Timestamp, got {start_timestamp} of type {type(start_timestamp)}).")
 
     if (pattern_start_dayofweek > 6) or (pattern_start_dayofweek < 0):
         raise ValueError("Start day has to be between 0 and 6.")
