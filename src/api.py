@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 if __name__ != "__main__":
     from .model.network_container import _DualModel, HydraulicNetwork, VirtualReservoir
     from .model.configuration import SUBSTITUTE_INFLOW_PATTERN_SUFFIX
+    from .util.data_processing import wrap_cyclic_dataframe
 else:
     from model.network_container import _DualModel, HydraulicNetwork, VirtualReservoir
     from model.configuration import SUBSTITUTE_INFLOW_PATTERN_SUFFIX
@@ -69,7 +70,7 @@ class DualModel:
     nw: _DualModel | None = field(default=None, init=False)
 
     # optional/dynamically updated
-    correction_flows: pd.DataFrame | None = field(default=None, init=False)
+    correction_flows: pd.DataFrame | None = field(default=None, init=False) # TODO: refactor as part of _DualModel
 
     def __post_init__(self):
         self._build_dual_model()
@@ -83,6 +84,7 @@ class DualModel:
             source_path=self.base_inp, inflow_pipes=list(self.inflow_mapping.values())
         )
 
+        # I forgot why I did this but there was a reason
         hm.check_pattern_compatibility(DualModelOptions.base_pattern_length)
 
         if self.pump_ids and DualModelOptions.use_pump_replacement:
@@ -94,7 +96,7 @@ class DualModel:
                 hm.replace_reservoir_or_tank_with_emitter_node(
                     reservoir_or_tank_id=k,
                     demand_pattern=v,
-                    pipes_to_reconnect=v,
+                    pipes_to_reconnect=[v],
                 )
 
         self.nw = hm.to_dual_model(self.pressure_sensor_node_ids)
@@ -113,21 +115,23 @@ class DualModel:
         (prefix is specified in network_container.VirtualReservoir._vr_prefix)
         """
 
+        _corr_flows = correction_flows.copy()
+
         if not DualModelOptions.use_virtual_flow_correction_patterns:
             raise ValueError("Correction will only be used when option is toggled.")
 
         assert isinstance(
-            correction_flows.index, pd.DatetimeIndex
-        ), "Index needs to be Datetime."
+            _corr_flows.index, pd.TimedeltaIndex
+        ), "Index needs to be Timedelta."
 
         assert (
-            correction_flows.columns.str.contains(
+            _corr_flows.columns.str.contains(
                 vr.replace(VirtualReservoir.vp_prefix, "")
             ).any()
             for vr in self.nw.virtual_reservoirs
         )
 
-        self.correction_flows = correction_flows
+        self.correction_flows = _corr_flows
         # sanitisize names
         self.correction_flows.columns = [
             f"{c.replace(VirtualReservoir.vp_prefix, VirtualReservoir.vr_prefix)}{VirtualReservoir.flow_corr_pattern_suffix}"
@@ -176,12 +180,14 @@ class DualModel:
             self.correction_flows is not None
             and DualModelOptions.use_virtual_flow_correction_patterns
         ):
-            self.nw.set_patterns(self.correction_flows, overwrite=True)
             if DualModelOptions.cyclic_pattern_wrapping:
-                self.nw.wrap_correction_patterns(
-                    start_timestamp=_heads.first_valid_index(),
-                    start_dow=DualModelOptions.correction_pattern_start_day,
+                _corr_flows = wrap_cyclic_dataframe(
+                    pattern_df=self.correction_flows.copy(),
+                    pattern_start_dayofweek=DualModelOptions.correction_pattern_start_day,
+                    start_timestamp=_heads.first_valid_index()
                 )
+
+                self.nw.set_patterns(_corr_flows, overwrite=True)
 
         # concat, assign
         data_patterns = pd.concat(patterns, axis=1)

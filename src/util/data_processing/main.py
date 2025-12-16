@@ -1,3 +1,4 @@
+from typing import Literal
 import pandas as pd
 
 def try_read_parquet(path):
@@ -22,10 +23,11 @@ def reindex_cyclic(df: pd.DataFrame, new_idx: pd.Index) -> pd.DataFrame:
 
     return _df
 
-def wrap_cyclic_patterns(
+def wrap_cyclic_dataframe(
     pattern_df: pd.DataFrame,
     pattern_start_dayofweek: int,
     start_timestamp: pd.Timestamp,
+    reset_index: bool = True,
 ) -> pd.DataFrame:
     """ Wraps a cyclic pattern to have it start at start_date day of week and time """
 
@@ -52,31 +54,64 @@ def wrap_cyclic_patterns(
     wrapped_patterns = pd.concat([
         pattern_df.loc[pattern_start_index:],
         pattern_df.loc[:pattern_start_index - pd.Timedelta("1ns")]
-    ]).set_index(pattern_df.index)
+    ])
+
+    if reset_index:
+        wrapped_patterns = wrapped_patterns.set_index(pattern_df.index)
 
     return wrapped_patterns
 
+def week_means(df: pd.DataFrame, first_dow: int = 0, adjust_index: bool = True) -> pd.DataFrame:
+    """Takes dataframe and builds mean values for every dayofweek, hour and minute
 
-def get_first_full_week(df: pd.DataFrame,
-                        start_dow: int = 0,
-                        exclusive: bool = True):
+    Args:
+        df: datetime dataframe to be aggregated
+        first_dow: 0==Monday, 6==Sunday
+        adjust_index: True if index should start at Timedelta(0), else index day is not ordered if first_dow != 0
+    """
 
     if not isinstance(df.index, pd.DatetimeIndex):
-        raise TypeError("Invalid index type.")
+        raise ValueError(
+            f"Invalid index type {type(df.index).__name__}, expected pd.DatetimeIndex"
+        )
 
-    dow = df.index.dayofweek
+    if df.index.inferred_freq == None:
+        raise ValueError("No inferrable frequency of data.")
 
-    num_idx = dow[dow.get_loc(start_dow)][0]
+    # group by dayofweek, hour and minute
+    _df = df.copy().groupby([df.index.dayofweek, df.index.hour, df.index.minute]).mean()
 
-    if num_idx is None:
-        raise ValueError(f"Weekday {start_dow} not detected.")
+    # 3 levels?
+    if _l:=len(_df.index.names) != 3:
+        raise ValueError(f"Invalid number of index levels ({_l}), expected 3.")
 
-    full_week = df.iloc[num_idx:].loc[:df.index[num_idx] + pd.Timedelta(days=7)]
+    # reorder so first day == start day of correction pattern
+    day_order = list(range(0,7))[first_dow:] + list(range(0,7))[:first_dow]
 
-    assert (full_week.last_valid_index() - full_week.first_valid_index()) == pd.Timedelta(days=7), f"No full week in dataframe."
+    _df = _df.loc[pd.IndexSlice[day_order,:,:]]
 
-    if exclusive:
-        return full_week.loc[:full_week.last_valid_index() - pd.Timedelta("1ns")]
-    return full_week
+    # restore timedelta
+    _df.index = pd.to_timedelta(
+        _df.index.get_level_values(0) * 60 * 60 * 24
+        + _df.index.get_level_values(1) * 60 * 60
+        + _df.index.get_level_values(2) * 60,
+        unit="s",
+    )
 
+    # convert to day range 0..7
+    if adjust_index:
+        _df.index = (_df.index - pd.Timedelta(days=first_dow)) % pd.Timedelta(days=7)
 
+    return _df
+
+def calculate_correction_flows(
+        df: pd.DataFrame,
+        start_dow: int = 0,
+        adjust_index: bool = True,
+        period: Literal["day", "week"] = "week"):
+
+    match period:
+        case "week":
+            return week_means(df, start_dow, adjust_index)
+        case "day":
+            raise NotImplementedError("Only weekly correction flow patterns supported at this time.")

@@ -21,7 +21,7 @@ from .network_simulation import (
     SimulationTargets,
 )
 
-from ..util.data_processing import wrap_cyclic_patterns
+from ..util.data_processing import wrap_cyclic_dataframe
 
 ## SUPER IMPORTANT MONKEY PATCH INCLUDED AT MODULE LEVEL ##############
 import src.util.oopnet_patch
@@ -150,6 +150,18 @@ class VirtualReservoir:
 
 @dataclass
 class HydraulicNetwork:
+
+    """Class that holds the on.Network
+    contains methods that change topology to
+    convert into _DualModel
+
+    Args:
+        source_path: path to inp file
+        nw: on.Network container
+        base_patterns: if not specified, all patterns in inp
+        inflow_pipes: pipes that connect to a tank or reservoir
+
+    """
 
     source_path: os.PathLike | None = field(default=None)
     nw: on.Network | None = field(default=None)
@@ -573,14 +585,13 @@ class HydraulicNetwork:
         """Overwrites network patterns with wrapped base patterns
         Does not affect base_pattern attr.
         """
-        _df = wrap_cyclic_patterns(
+        _df = wrap_cyclic_dataframe(
             pattern_df=self.base_patterns[pattern_ids].copy(),
             pattern_start_dayofweek=start_dow,
             start_timestamp=start_timestamp,
         )
 
         self.set_patterns(_df, overwrite=True)
-
 
     def run_simulation(
         self,
@@ -627,23 +638,5 @@ class _DualModel(HydraulicNetwork):
     ) -> dict[str, pd.Series | pd.DataFrame]:
         raise NotImplementedError("Localisation not yet implemented.")
 
-    def get_correction_pattern_dataframe(self) -> pd.DataFrame:
-        df = pd.DataFrame({k: v for k, v in self.get_pattern_dict().items() if VirtualReservoir.flow_corr_pattern_suffix in k})
 
-        df.index = pd.timedelta_range(
-            start=pd.Timedelta(0),
-            freq=self.nw.times.patterntimestep,
-            periods=len(df))
 
-        return df
-
-    def wrap_correction_patterns(
-        self, start_timestamp: pd.Timestamp, start_dow: int = 0
-    ):
-        _df = wrap_cyclic_patterns(
-            pattern_df=self.get_correction_pattern_dataframe(),
-            start_timestamp=start_timestamp,
-            pattern_start_dayofweek=start_dow,
-        )
-
-        self.set_patterns(_df, overwrite=True)
