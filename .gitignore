@@ -16,6 +16,8 @@ tmp/
 logs/**/*
 data/
 
+
+
 _src/
 
 **/cusum/data
@@ -24,6 +26,9 @@ _src/
 
 # notebooks
 *.ipynb
+# Allow Demo notebook
+!demo.ipynb
+
 
 *.pdf
 
