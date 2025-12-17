@@ -56,5 +56,7 @@ def read_demands(network, block: list):
             j.demandpattern = [patterns[pid] for pid in pat]
 
 # monkey patch
+OOPNET_PATCH_APPLIED = False
 oopnet.reader.reading_modules.read_system_operation.read_demands = read_demands
+OOPNET_PATCH_APPLIED = True
 print("Monkey patch to oopnet.reader.reading_modules.read_system_operation.read_demands applied.")

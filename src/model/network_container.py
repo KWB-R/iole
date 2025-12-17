@@ -21,6 +21,7 @@ from .configuration import (
 from .network_simulation import Simulator, SimulationTargets, Localiser
 
 from ..util.data_processing import wrap_cyclic_dataframe
+from ..util.oopnet_patch.main import
 
 ## SUPER IMPORTANT MONKEY PATCH INCLUDED AT MODULE LEVEL ##############
 import src.util.oopnet_patch
