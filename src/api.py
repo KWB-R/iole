@@ -12,11 +12,14 @@ if TYPE_CHECKING:
 
 if __name__ != "__main__":
     from .model.network_container import _DualModel, HydraulicNetwork, VirtualReservoir
+    from .model.network_simulation import LocalisationResultAggregation
     from .model.configuration import SUBSTITUTE_INFLOW_PATTERN_SUFFIX
     from .util.data_processing import wrap_cyclic_dataframe
 else:
     from model.network_container import _DualModel, HydraulicNetwork, VirtualReservoir
+    from model.network_simulation import LocalisationResultAggregation
     from model.configuration import SUBSTITUTE_INFLOW_PATTERN_SUFFIX
+    from util.data_processing import wrap_cyclic_dataframe
 
 MeasurementType = Literal["head", "flow", "pump_flow"]
 
@@ -251,6 +254,7 @@ class DualModel:
         pump_flows: pd.DataFrame | None = None,
         pipe_list: list[str] | None = None,
         temporal_resolution: str = "5 min",
+        aggregation: LocalisationResultAggregation = "none",
     ) -> Any:
         # first check, further validation between dataframes in _get_data_patterns
         if not leak_flow.index.equals(heads.index):
@@ -273,6 +277,7 @@ class DualModel:
             leak_flow=leak_flow,
             pipe_list=pipe_list,
             temporal_resolution=temporal_resolution,
+            aggregation=aggregation,
         )
 
         return self.last_localisation

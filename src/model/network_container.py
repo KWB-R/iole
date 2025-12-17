@@ -18,10 +18,10 @@ from .configuration import (
     SUBSTITUTE_PUMP_LINK_PREFIX,
     SUBSTITUTE_INFLOW_PATTERN_SUFFIX,
 )
-from .network_simulation import Simulator, SimulationTargets, Localiser
+from .network_simulation import Simulator, SimulationTargets, Localiser, LocalisationResultAggregation
 
 from ..util.data_processing import wrap_cyclic_dataframe
-from ..util.oopnet_patch.main import
+from ..util.oopnet_patch.main import OOPNET_PATCH_APPLIED
 
 ## SUPER IMPORTANT MONKEY PATCH INCLUDED AT MODULE LEVEL ##############
 import src.util.oopnet_patch
@@ -176,6 +176,8 @@ class HydraulicNetwork:
             )
 
         if self.source_path:
+            if not OOPNET_PATCH_APPLIED:
+                raise RuntimeError(f"oopnet demand reader not patched.")
             self.nw = on.Network.read(self.source_path)
 
         if self.base_patterns is None:
@@ -662,6 +664,7 @@ class _DualModel(HydraulicNetwork):
     def run_localisation(
         self,
         leak_flow: pd.Series,
+        aggregation: LocalisationResultAggregation = "none",
         temporal_resolution: Optional[str | pd.DateOffset] = None,
         pipe_list: Optional[list[str]] = None,
     ) -> dict[str, Any]:
@@ -693,7 +696,7 @@ class _DualModel(HydraulicNetwork):
 
             localiser = Localiser(
                 dual_model_inp_path=str(dm_path),
-                aggregation="none",
+                aggregation=aggregation,
                 patterns=patterns,
                 pipes_to_test=pipe_list,
                 virtual_flow=lf,

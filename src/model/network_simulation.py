@@ -446,6 +446,8 @@ class Simulator:
                 os.remove(_path)
 
 
+LocalisationResultAggregation = Literal["none", "partial", "total", "abs_total"]
+
 @dataclass
 class Localiser:
     """
@@ -470,7 +472,7 @@ class Localiser:
     virtual_pipes: list[str]
     pipes_to_test: list[str] | None = field(default=None, init=True)
 
-    aggregation: Literal["none", "partial", "total", "abs_total"] = "partial"
+    aggregation: LocalisationResultAggregation = "none"
 
     # prepared in workflow
     _prepared_network: epanet = field(default=None, init=False)
@@ -702,6 +704,8 @@ _DEBUG_INP_FOLDER = os.path.normpath(
     r"data\output\temp\localisation"
 )
 
+
+
 @dataclass
 class _LocalisationWorker:
 
@@ -710,7 +714,7 @@ class _LocalisationWorker:
 
     inp_path: os.PathLike
     virtual_pipes: List[str]
-    aggregation: Literal["none", "partial", "total", "abs_total"]
+    aggregation: LocalisationResultAggregation
 
     _d: epanet = field(default=None, init=False)
     _simulator: Simulator = field(default_factory=Simulator, init=False)
