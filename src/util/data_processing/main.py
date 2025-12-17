@@ -82,7 +82,7 @@ def week_means(df: pd.DataFrame, first_dow: int = 0, adjust_index: bool = True) 
     _df = df.copy().groupby([df.index.dayofweek, df.index.hour, df.index.minute]).mean()
 
     # 3 levels?
-    if _l:=len(_df.index.names) != 3:
+    if (_l := len(_df.index.names)) != 3:
         raise ValueError(f"Invalid number of index levels ({_l}), expected 3.")
 
     # reorder so first day == start day of correction pattern
@@ -92,9 +92,9 @@ def week_means(df: pd.DataFrame, first_dow: int = 0, adjust_index: bool = True) 
 
     # restore timedelta
     _df.index = pd.to_timedelta(
-        _df.index.get_level_values(0) * 60 * 60 * 24
-        + _df.index.get_level_values(1) * 60 * 60
-        + _df.index.get_level_values(2) * 60,
+        _df.index.get_level_values(0) * 60 * 60 * 24 # d -> s
+        + _df.index.get_level_values(1) * 60 * 60 # h -> s
+        + _df.index.get_level_values(2) * 60, # min -> s
         unit="s",
     )
 

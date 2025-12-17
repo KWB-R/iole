@@ -497,28 +497,18 @@ class Localiser:
         TODO: Find better validation.
         """
         # 1. timedelta or datetime validation
-        for attr in ["patterns", "virtual_flow"]:
-            df = getattr(self, attr)
-            if not isinstance(df.index, (pd.TimedeltaIndex, pd.DatetimeIndex)):
-                raise Exception(f"Invalid index, use timedelta or datetime.")
-            if isinstance(df, pd.DatetimeIndex):
-                df.index = df.index - df.last_valid_index()
-                setattr(self, attr, df)
+        # for attr in ["patterns", "virtual_flow"]:
+        #     df = getattr(self, attr)
+        #     if not isinstance(df.index, (pd.TimedeltaIndex, pd.DatetimeIndex)):
+        #         raise Exception(f"Invalid index, use timedelta or datetime.")
+        #     if isinstance(df, pd.DatetimeIndex):
+        #         df.index -= df.first_valid_index() # == TimedeltaIndex starting at Timedelta(0)
+        #         setattr(self, attr, df)
 
         # 2. data matches each other?
-        # either
-        check0 = self.patterns.index.equals(self.virtual_flow.index)
+        if not self.patterns.index.equals(self.virtual_flow.index):
+            raise Exception(f"Provided virtual flow index does not match provided data index.")
 
-        # index is equal after resampling
-        try:
-            check1 = self.patterns.resample(
-                rule=self.virtual_flow.index.inferred_freq
-            ).index.equals(self.patterns.index)
-        except:
-            check1 = False
-
-        if not any(check for check in [check0, check1]):
-            raise Exception(f"Invalid timeseries indices provided.")
 
     def run(self, temporal_resolution: str = "1 h") -> dict[str, Any]:
         """
@@ -537,12 +527,17 @@ class Localiser:
         """
         d = self._prepare_network(temporal_resolution)
 
+        d.saveInputFile(r"C:\Users\jkoslo\Documents\iOLE (lok)\programming\iole_current\data\output\temp\localisation\_test.inp")
+
         if self.pipes_to_test is None:
             self.pipes_to_test = [p for p in d.getLinkPipeNameID()]
 
         with tempfile.TemporaryDirectory() as tdir:
             # copy model
             inp_pathes = self._multiply_inp_file(tdir, d)
+
+            # close original model
+            d.closeNetwork()
 
             # setup source inp <-> worker mapping
             manager = mp.Manager()
@@ -582,19 +577,20 @@ class Localiser:
             network_patterns=pattern_ids_set, dataframe_patterns=pattern_df_ids
         )
 
+        ### DEPRECATED, resampling happens before in iOLE app
         # Prepare data
-        tr = self._determine_tr(tr)  # == resampling rule
-        self._prepared_patterns = (
-            self.patterns.resample(rule=tr).mean().loc[:, pattern_ids]
-        )  # network pattern id order
-        self._prepared_vf = self.virtual_flow.resample(rule=tr).mean()
+        # tr = self._determine_tr(tr)  # == resampling rule
+        # self._prepared_patterns = (
+        #     self.patterns.resample(rule=tr).mean().loc[:, pattern_ids]
+        # )  # network pattern id order
+        # self._prepared_vf = self.virtual_flow.resample(rule=tr).mean()
 
-        # Set patterns
-        d.setPatternMatrix(self._prepared_patterns.T.values)
-        d.addPattern(VIRTUAL_FLOW_PATTERN_NAME, self._prepared_vf.values)
+        # # Set patterns
+        # d.setPatternMatrix(self._prepared_patterns.T.values)
+        d.addPattern(VIRTUAL_FLOW_PATTERN_NAME, self.virtual_flow)
 
         # Adjust timesteps
-        tstep = self._tdidx_frq_as_seconds(self._prepared_patterns.index)
+        tstep = self._tdidx_frq_as_seconds(self.virtual_flow.index)
         d.setTimeHydraulicStep(tstep)
         d.setTimePatternStep(tstep)
         d.setTimeQualityStep(tstep)
@@ -602,7 +598,7 @@ class Localiser:
 
         # adjust duration
         d.setTimeSimulationDuration(
-            self._tdidx_duration_as_seconds(self._prepared_patterns.index)
+            self._tdidx_duration_as_seconds(self.virtual_flow.index)
         )
 
         return d
@@ -637,15 +633,22 @@ class Localiser:
 
     def _get_tempdir_inp_pathes(self, tdir: os.PathLike) -> List[os.PathLike]:
         names = []
-        for i in range(self.N_PROCESSES):
+        n = self.N_PROCESSES
+
+        if (self.pipes_to_test is not None) and (len(self.pipes_to_test) < n):
+            n = len(self.pipes_to_test)
+
+        for i in range(n):
             _path = os.path.join(tdir, f"{i}.inp")
             names.append(_path)
+
         return names
 
     def _multiply_inp_file(self, tdir: os.PathLike, nw: epanet) -> list[os.PathLike]:
         pathes = self._get_tempdir_inp_pathes(tdir)
         for path in pathes:
             nw.saveInputFile(path)
+            print(f"Created localisation copy: {path}")
         return pathes
 
     @staticmethod
@@ -695,11 +698,9 @@ class Localiser:
 
 # Process workers
 _WORKER = None  # global container for worker persistence
-
 _DEBUG_INP_FOLDER = os.path.normpath(
-    r"C:\Users\jkoslo\Documents\iOLE (lok)\programming\iole_kwb\iole\data\temp\debug_inp"
+    r"data\output\temp\localisation"
 )
-
 
 @dataclass
 class _LocalisationWorker:
@@ -788,12 +789,11 @@ class _LocalisationWorker:
         nw.setNodeBaseDemands(pipenode_idx, 1)
 
         try:
+            if save_location is not None:
+                nw.saveInputFile(save_location)
             yield nw
 
         finally:
-            if save_location is not None:
-                nw.saveInputFile(save_location)
-
             nw.deleteNode(pipenode_idx)
             nw.addLinkPipe(
                 pipe_id,

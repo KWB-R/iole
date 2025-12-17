@@ -1,9 +1,11 @@
 from __future__ import annotations
 import os
 from copy import deepcopy
+from pathlib import Path
 
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, ClassVar, Literal, Self, Dict, Any
+from collections.abc import Callable
 import tempfile
 
 import pandas as pd
@@ -16,10 +18,7 @@ from .configuration import (
     SUBSTITUTE_PUMP_LINK_PREFIX,
     SUBSTITUTE_INFLOW_PATTERN_SUFFIX,
 )
-from .network_simulation import (
-    Simulator,
-    SimulationTargets,
-)
+from .network_simulation import Simulator, SimulationTargets, Localiser
 
 from ..util.data_processing import wrap_cyclic_dataframe
 
@@ -150,7 +149,6 @@ class VirtualReservoir:
 
 @dataclass
 class HydraulicNetwork:
-
     """Class that holds the on.Network
     contains methods that change topology to
     convert into _DualModel
@@ -593,6 +591,34 @@ class HydraulicNetwork:
 
         self.set_patterns(_df, overwrite=True)
 
+    def get_sample_pipes(
+        self,
+        pctg: float,
+        min_pipes: int,
+        seed: int = 42,
+        exclude_funcs: list[Callable] | None = None,
+    ):
+        """Return random pipe ids e.g. for localisation testing,
+        if no specific exclude_funcs are provided, defaults to:
+            1. no pipes that start with the vp prefix
+            2. no pipes that contain "PUMP" (L-Town-specific probably)
+        """
+
+        if exclude_funcs is None:
+            exclude_funcs = [
+                lambda x: x.startswith((VirtualReservoir.vp_prefix)),
+                lambda x: "PUMP" in x,
+            ]
+
+        pipes = [
+            p
+            for p in on.get_pipe_ids(self.nw)
+            if not any(func(p) for func in exclude_funcs)
+        ]
+
+        n = max(min_pipes, int(pctg * len(pipes)))
+        return np.random.default_rng(seed=seed).choice(pipes, n).tolist()
+
     def run_simulation(
         self,
         simulation_targets: SimulationTargets,
@@ -625,18 +651,56 @@ class _DualModel(HydraulicNetwork):
     correction_pattern_ids: list[str] = field(default_factory=list, init=False)
 
     def __post_init__(self):
-        self.correction_pattern_ids = [p for p in on.get_pattern_ids(self.nw) if VirtualReservoir.flow_corr_pattern_suffix in p]
+        self.correction_pattern_ids = [
+            p
+            for p in on.get_pattern_ids(self.nw)
+            if VirtualReservoir.flow_corr_pattern_suffix in p
+        ]
         return super().__post_init__()
 
     def run_localisation(
         self,
         leak_flow: pd.Series,
-        heads: pd.DataFrame,
-        inflows: pd.DataFrame,
         temporal_resolution: Optional[str | pd.DateOffset] = None,
         pipe_list: Optional[list[str]] = None,
-    ) -> dict[str, pd.Series | pd.DataFrame]:
-        raise NotImplementedError("Localisation not yet implemented.")
+    ) -> dict[str, Any]:
+        """model.network_simulation.Localiser contains some historical decisions
+        that make it necessary atm to extract the patterns here
+
+        Args;
+            leak_flow: series of proposed leakage signal
+            temporal_resolution: pandas conform timedelta string for optional resampling
+            pipe_list: if not all pipes should be tested
+        """
+
+        with tempfile.TemporaryDirectory() as tdir:
+            # 1. write base model (multiplied in localisation)
+            dm_path = Path(tdir) / "dm.inp"
+            self.save(dm_path)
+
+            # 2. extract patterns, this fails if leak flow index does not match pattern index
+            patterns = self.get_pattern_df().set_index(leak_flow.index).copy()
+            lf = leak_flow.copy()
+            tr = patterns.index.inferred_freq
+
+            # 3. adjust frequency
+            if temporal_resolution is not None:
+                patterns = patterns.resample(rule=temporal_resolution).mean()
+                lf = lf.resample(rule=temporal_resolution).mean()
+                tr = temporal_resolution
 
 
+            localiser = Localiser(
+                dual_model_inp_path=str(dm_path),
+                aggregation="none",
+                patterns=patterns,
+                pipes_to_test=pipe_list,
+                virtual_flow=lf,
+                virtual_pipes=self.virtual_pipes,
+            )
 
+            localisation_result = localiser.run(temporal_resolution=tr)
+
+            # remove temporary file
+
+        return localisation_result
