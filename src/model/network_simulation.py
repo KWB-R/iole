@@ -565,6 +565,8 @@ class Localiser:
 
         self._results = pd.Series(result_dict).sort_values()
 
+        self._results = self._results / self._results.min()
+
         return self._results
 
     def _prepare_network(self, tr: pd.DateOffset):
