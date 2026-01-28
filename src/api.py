@@ -254,7 +254,7 @@ class DualModel:
         pump_flows: pd.DataFrame | None = None,
         pipe_list: list[str] | None = None,
         temporal_resolution: str = "5 min",
-        aggregation: LocalisationResultAggregation = "none",
+        #aggregation: LocalisationResultAggregation = "none",
     ) -> Any:
         # first check, further validation between dataframes in _get_data_patterns
         if not leak_flow.index.equals(heads.index):
@@ -271,6 +271,8 @@ class DualModel:
 
         # native patterns
         self._process_base_patterns(simulation_start=data_patterns.first_valid_index())
+
+        aggregation = "none" # sadly, the detection algorithm is not flexible at this time
 
         # start localisation
         self.last_localisation = self.nw.run_localisation(

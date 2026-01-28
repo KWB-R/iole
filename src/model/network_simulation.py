@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Literal, Any, Never, Tuple, ClassVar
+from typing import Callable, List, Dict, Optional, Literal, Any, Never, Tuple, ClassVar
 
 import pandas as pd
 import numpy as np
@@ -25,7 +25,7 @@ SimulationTargets = Dict[SimulationKind, List[str]]
 
 VIRTUAL_FLOW_PATTERN_NAME = "virtual_flow"
 
-__DEBUG = True
+__DEBUG = False
 
 def _to_offset(s: str) -> Tuple[bool, pd.DateOffset]:
     try:
@@ -480,7 +480,7 @@ class Localiser:
     _prepared_vf: pd.Series = field(default=None, init=False)
 
     # result container
-    _results: dict[str, Any] = field(default=None, init=False)
+    _results: pd.Series = field(default=None, init=False)
 
     def __post_init__(self):
         self._validate_timeseries_data()
@@ -512,7 +512,7 @@ class Localiser:
             raise Exception(f"Provided virtual flow index does not match provided data index.")
 
 
-    def run(self, temporal_resolution: str = "1 h") -> dict[str, Any]:
+    def run(self, temporal_resolution: str = "1 h") -> pd.Series:
         """
         Launches parallel localisation simulations
 
@@ -563,7 +563,7 @@ class Localiser:
 
                 result_dict = {name: result for name, result in results}
 
-        self._results = result_dict
+        self._results = pd.Series(result_dict).sort_values()
 
         return self._results
 
@@ -705,7 +705,6 @@ _DEBUG_INP_FOLDER = os.path.normpath(
 )
 
 
-
 @dataclass
 class _LocalisationWorker:
 
@@ -747,24 +746,38 @@ class _LocalisationWorker:
                 epyt_nw=nw,
                 simulation_targets={
                     "flow": self.virtual_pipes,
-                    "head": self.pressure_nodes,
+                    #"head": self.pressure_nodes,
                 },
             )
 
             vf = sim_result["flow"]
-            heads = sim_result["head"]
+            #heads = sim_result["head"]      
 
-            match self.aggregation:
-                case "none":
-                    pass
-                case "partial":
-                    vf = vf.sum(axis=1)
-                case "total":
-                    vf = vf.sum(axis=1).sum()
-                case "abs_total":
-                    vf = vf.sum(axis=1).abs().sum()
+            # match self.aggregation:
+            #     case "none":
+            #         pass
+            #     case "partial":
+            #         vf = vf.sum(axis=1)
+            #     case "total":
+            #         vf = vf.sum(axis=1).sum()
+            #     case "abs_total":
+            #         vf = vf.sum(axis=1).abs().sum()
+            #     case _:
+            #         raise ValueError(f"Invalid value {self.aggregation}.")
 
-        return vf, heads
+        # aggregation/localisation data methods not part of this iteration
+        # original approach vf.sum(axis=1).abs().sum() <- find lowest
+        # does not seem to work properly with fixed flows, so using alternative method
+        # that is not published but yields better results in testing
+
+        # 1. mean of signal pere virtual reservoir
+        # 2. abs value of that
+        # 3. mean of all signals
+        # indicator of the signal strength in the virtual reservoirs for the tested pipe
+        # if all pipes are tested, weakest signal is best guess
+        vf = vf.mean().abs().mean()
+
+        return vf#, heads
 
     @contextmanager
     def _live_insert_leak_node_epyt(
