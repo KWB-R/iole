@@ -16,8 +16,6 @@ tmp/
 logs/**/*
 data/
 
-
-
 _src/
 
 **/cusum/data
