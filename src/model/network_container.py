@@ -1,30 +1,34 @@
 from __future__ import annotations
+
 import os
-from copy import deepcopy
-from pathlib import Path
-
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple, ClassVar, Literal, Self, Dict, Any
-from collections.abc import Callable
 import tempfile
+from collections.abc import Callable
+from copy import deepcopy
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, ClassVar, Dict, List, Literal, Optional, Self, Tuple
 
-import pandas as pd
 import numpy as np
 import oopnet as on
-
-from .configuration import (
-    ARTIFICIAL_LEAK_PREFIX,
-    SPLIT_PIPE_SUFFIX,
-    SUBSTITUTE_PUMP_LINK_PREFIX,
-    SUBSTITUTE_INFLOW_PATTERN_SUFFIX,
-)
-from .network_simulation import Simulator, SimulationTargets, Localiser, LocalisationResultAggregation
-
-from ..util.data_processing import wrap_cyclic_dataframe
-from ..util.oopnet_patch.main import OOPNET_PATCH_APPLIED
+import pandas as pd
 
 ## SUPER IMPORTANT MONKEY PATCH INCLUDED AT MODULE LEVEL ##############
 import src.util.oopnet_patch
+
+from ..util.data_processing import wrap_cyclic_dataframe
+from ..util.oopnet_patch.main import OOPNET_PATCH_APPLIED
+from .configuration import (
+    ARTIFICIAL_LEAK_PREFIX,
+    SPLIT_PIPE_SUFFIX,
+    SUBSTITUTE_INFLOW_PATTERN_SUFFIX,
+    SUBSTITUTE_PUMP_LINK_PREFIX,
+)
+from .network_simulation import (
+    LocalisationResultAggregation,
+    Localiser,
+    SimulationTargets,
+    Simulator,
+)
 
 #######################################################################
 
@@ -76,7 +80,6 @@ class VirtualReservoir:
         _nw_nodes = on.get_node_ids(nw)
 
         for nid in connected_nodes:
-
             new_vr = cls(connected_node_id=nid)
 
             if new_vr.connected_node_id not in _nw_nodes:
@@ -252,9 +255,9 @@ class HydraulicNetwork:
 
         pattern_ids = on.get_pattern_ids(self.nw)
 
-        assert all(
-            c in df.columns for c in pattern_ids
-        ), "Not all patterns found in provided dataframe."
+        assert all(c in df.columns for c in pattern_ids), (
+            "Not all patterns found in provided dataframe."
+        )
 
         df_freq = (
             pd.Timedelta(pd.infer_freq(df.index)).total_seconds()
@@ -348,9 +351,9 @@ class HydraulicNetwork:
                                             pipes that werent specified in pipes_to_reconnect
         """
         if isinstance(demand_pattern, pd.Series):
-            assert len(demand_pattern) == len(
-                self.pattern_index
-            ), "Index of provided timeseries does not match general network pattern index."
+            assert len(demand_pattern) == len(self.pattern_index), (
+                "Index of provided timeseries does not match general network pattern index."
+            )
             values = demand_pattern.values
         elif isinstance(demand_pattern, str):
             values = [0]
@@ -647,7 +650,6 @@ class HydraulicNetwork:
 
 @dataclass
 class _DualModel(HydraulicNetwork):
-
     virtual_reservoirs: list[str] = field(default_factory=list)
     virtual_pipes: list[str] = field(default_factory=list)
 
@@ -692,7 +694,6 @@ class _DualModel(HydraulicNetwork):
                 patterns = patterns.resample(rule=temporal_resolution).mean()
                 lf = lf.resample(rule=temporal_resolution).mean()
                 tr = temporal_resolution
-
 
             localiser = Localiser(
                 dual_model_inp_path=str(dm_path),
