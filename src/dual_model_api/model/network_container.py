@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 from collections.abc import Callable
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,10 +14,9 @@ import oopnet as on
 import pandas as pd
 
 ## SUPER IMPORTANT MONKEY PATCH INCLUDED AT MODULE LEVEL ##############
-import src.util.oopnet_patch
-
+# import ..util.oopnet_patch
 from ..util.data_processing import wrap_cyclic_dataframe
-from ..util.oopnet_patch.main import OOPNET_PATCH_APPLIED
+from ..util.oopnet_patch import OOPNET_PATCH_APPLIED
 from .configuration import (
     ARTIFICIAL_LEAK_PREFIX,
     SPLIT_PIPE_SUFFIX,
@@ -72,7 +72,9 @@ class VirtualReservoir:
         return f"{self.connected_node_id}"
 
     @classmethod
-    def add(cls, nw: on.Network, *connected_nodes: str) -> Tuple[List[str], List[str]]:
+    def add(
+        cls, nw: on.Network, *connected_nodes: str, cv: bool = False
+    ) -> Tuple[List[str], List[str]]:
 
         vrids = []
         vpids = []
@@ -113,6 +115,7 @@ class VirtualReservoir:
                 diameter=100,
                 length=1,
                 roughness=130,
+                status="OPEN" if not cv else "CV",
                 startnode=connected_node,
                 endnode=new_vr.reservoir,
             )
@@ -190,9 +193,6 @@ class HydraulicNetwork:
         return f"{type(self).__name__}: {self.nw.title or 'unnamed network'}"
 
     def __str__(self):
-        return self.__repr__()
-
-    def _repr_pretty_(self):
         return self.__repr__()
 
     @property
@@ -536,11 +536,11 @@ class HydraulicNetwork:
         on.add_pipe(self.nw, new_pipe)
         self.pump_demands.append(pump_id)
 
-    def to_dual_model(self, node_names: List[str]) -> _DualModel:
+    def to_dual_model(self, node_names: List[str], cv: bool = False) -> _DualModel:
 
         nw_copy = deepcopy(self.nw)
 
-        vrs, vps = VirtualReservoir.add(nw_copy, *node_names)
+        vrs, vps = VirtualReservoir.add(nw_copy, *node_names, cv=cv)
 
         dm = _DualModel(
             source_path=None,
@@ -629,15 +629,21 @@ class HydraulicNetwork:
         self,
         simulation_targets: SimulationTargets,
         solver_options: Optional[Dict[str, List[Any]]] = None,
+        folder: Literal["temporary"] | os.PathLike = "temporary",
     ) -> Dict[SimulationTargets, pd.DataFrame]:
-        """Run simulation using EpytSimulation class
+        """Run simulation using Simulator
         - slices result if indices do not match
         """
-
         simulator = Simulator(solver_options=solver_options)
 
-        with tempfile.TemporaryDirectory() as tdir:
-            tpath = os.path.join(tdir, "dual_model.inp")
+        directory_cm = (
+            tempfile.TemporaryDirectory()
+            if folder == "temporary"
+            else nullcontext(folder)
+        )
+
+        with directory_cm as directory:
+            tpath = os.path.join(directory, "model.inp")
             self.save(tpath)
             result = simulator.run_simulation(
                 inp_path=tpath,
@@ -646,6 +652,147 @@ class HydraulicNetwork:
             )
 
         return result
+
+
+@dataclass
+class LeakageNetwork(HydraulicNetwork):
+    """
+    Adds functionality to add artificial leakages as demands by splitting a pipe and inserting a leak demand
+    """
+
+    _leak_nodes: dict[str, dict] = field(
+        default_factory=dict, init=False
+    )  # track artificial leakages for testing purposes
+
+    def add_leaks(self, *leaks: pd.Series):
+        """Uses a pd.Series with a name that matches a pipe to insert a Node at the pipes center that has a demand equal to the series values"""
+        if not leaks:
+            return None
+
+        pipe_ids = on.get_pipe_ids(self.nw)
+        pidx = self.pattern_index
+        pfreq = pd.Timedelta(pidx.freq)
+
+        for l in leaks:
+            if l.name not in pipe_ids:
+                print(f"{l.name} not found in network pipe ids, skipping.")
+                continue
+
+            if not isinstance(l.index, pd.TimedeltaIndex):
+                print(f"Index of {l.name} is not pd.TimedeltaIndex, skipping.")
+                continue
+
+            lfreq = (
+                pd.Timedelta(l.index.freq)
+                if l.index.freq is not None
+                else pd.Timedelta(pd.infer_freq(l.index))
+            )
+            if lfreq is None:
+                print(f"Freq of {l.name} is not None, skipping.")
+                continue
+
+            if lfreq != pfreq:
+                print(
+                    f"Freq of {l.name} ({lfreq}) does not match pattern freq ({pfreq}), skipping."
+                )
+                continue
+
+            if len(pidx) > len(l):
+                _l = l.copy().reindex(pidx).fillna(0)
+            else:
+                _l = l.copy()
+
+            self._insert_leak(_l)
+
+        # adjust sim time
+        new_sim_duration = self.max_pattern_steps * pfreq
+        self.nw.times.duration = new_sim_duration
+
+        return self
+
+    def _insert_leak(self, leak: pd.Series):
+
+        leak_node_id = f"{ARTIFICIAL_LEAK_PREFIX}{leak.name}"
+        split_pipe_name = f"{leak.name}{SPLIT_PIPE_SUFFIX}"
+
+        if leak_node_id not in on.get_node_ids(self.nw):
+            try:
+                leak_pipe = on.get_pipe(self.nw, leak.name)
+                sn, en = leak_pipe.startnode, leak_pipe.endnode
+
+                # add pattern
+                new_pattern = on.Pattern(id=leak_node_id, multipliers=leak.values)
+                on.add_pattern(self.nw, new_pattern)
+
+                # define leak node
+                leak_node = on.Junction(
+                    id=leak_node_id,
+                    elevation=(sn.elevation + en.elevation) / 2,
+                    demand=1,
+                    demandpattern=on.Pattern(leak_node_id),
+                    xcoordinate=(sn.xcoordinate + en.xcoordinate) / 2,
+                    ycoordinate=(sn.ycoordinate + en.ycoordinate) / 2,
+                )
+                on.add_junction(self.nw, leak_node)
+
+                # reconnect old pipe
+                leak_pipe.endnode = leak_node
+                leak_pipe.length /= 2
+
+                # define new pipe
+                new_pipe = on.Pipe(
+                    id=split_pipe_name,
+                    length=leak_pipe.length,
+                    diameter=leak_pipe.diameter,
+                    roughness=leak_pipe.roughness,
+                    minorloss=leak_pipe.minorloss,
+                    startnode=leak_node,
+                    endnode=en,
+                )
+
+                # add new pipe
+                on.add_pipe(self.nw, new_pipe)
+
+                # save leak_node props
+                self._leak_nodes[leak_node.id] = {
+                    "node_id": leak_node.id,
+                    "original_pipe": {
+                        "id": leak.name,
+                        "start_node": sn,
+                        "end_node": en,
+                    },
+                    "split_pipe": {"id": split_pipe_name},
+                }
+
+                print(f"Inserted leak at node id '{leak_node_id}'.")
+
+            except Exception as e:
+                raise e
+
+        else:
+            print(f"Node '{leak_node_id}' already in network, no leak inserted.")
+
+    def remove_artificial_leaks(self, *ids: str):
+        if ids is None:
+            ids = self._leak_nodes.keys()
+
+        for ln in ids:
+            # remove elements
+            on.remove_node(self.nw, ln["node_id"])
+            on.remove_pipe(self.nw, ln["split_pipe"]["id"])
+
+            # reconnect original pipe
+            original_pipe = on.get_pipe(self.nw, ln["original_pipe"]["id"])
+            original_pipe.length = original_pipe.length * 2
+            original_pipe.startnode = ln["original_pipe"]["start_node"]
+            original_pipe.endnode = ln["original_pipe"]["end_node"]
+
+            # remove leakage pattern
+            self.nw._patterns.pop(
+                f"{ARTIFICIAL_LEAK_PREFIX}{ln['original_pipe']['id']}", None
+            )
+
+            self._leak_nodes.pop(ln)
 
 
 @dataclass

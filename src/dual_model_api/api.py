@@ -1,9 +1,9 @@
 """Contains functions to create HydraulicModel/DualModel instances and perform simulations"""
 
-from typing import Never, TYPE_CHECKING, Literal, Any
 from dataclasses import dataclass, field
-from pathlib import Path
 from functools import cached_property
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal, Never
 
 import pandas as pd
 
@@ -11,21 +11,26 @@ if TYPE_CHECKING:
     import oopnet as on
 
 if __name__ != "__main__":
-    from .model.network_container import _DualModel, HydraulicNetwork, VirtualReservoir
-    from .model.network_simulation import LocalisationResultAggregation
     from .model.configuration import SUBSTITUTE_INFLOW_PATTERN_SUFFIX
+    from .model.network_container import HydraulicNetwork, VirtualReservoir, _DualModel
+    from .model.network_simulation import LocalisationResultAggregation
     from .util.data_processing import wrap_cyclic_dataframe
 else:
-    from model.network_container import _DualModel, HydraulicNetwork, VirtualReservoir
-    from model.network_simulation import LocalisationResultAggregation
-    from model.configuration import SUBSTITUTE_INFLOW_PATTERN_SUFFIX
-    from util.data_processing import wrap_cyclic_dataframe
+    from src.dual_model_api.model.configuration import SUBSTITUTE_INFLOW_PATTERN_SUFFIX
+    from src.dual_model_api.model.network_container import (
+        HydraulicNetwork,
+        VirtualReservoir,
+        _DualModel,
+    )
+    from src.dual_model_api.model.network_simulation import (
+        LocalisationResultAggregation,
+    )
+    from src.dual_model_api.util.data_processing import wrap_cyclic_dataframe
 
 MeasurementType = Literal["head", "flow", "pump_flow"]
 
 
 class DualModelOptions:
-
     base_pattern_start_day: int = (
         0  # 0=Monday, 6=Sunday; patterns have to start at 00:00
     )
@@ -47,9 +52,12 @@ class DualModelOptions:
         0  # 0=Monday, 6=Sunday; patterns have to start at 00:00
     )
 
+    virtual_pipes_as_cv: bool = (
+        False  # if True, VPs will only allow flow from the system to the VR
+    )
+
 
 class LTownSpecifics:
-
     pressure_sensors: list[str] = [
         "n54",
         "n105",
@@ -156,7 +164,9 @@ class DualModel:
                     pipes_to_reconnect=[v],
                 )
 
-        self.nw = hm.to_dual_model(self.pressure_sensor_node_ids)
+        self.nw = hm.to_dual_model(
+            self.pressure_sensor_node_ids, cv=DualModelOptions.virtual_pipes_as_cv
+        )
 
     def set_correction_flows(self, correction_flows: pd.DataFrame) -> Never | None:
         """This would be a 7-day DataFrame that contains
@@ -177,9 +187,9 @@ class DualModel:
         if not DualModelOptions.use_virtual_flow_correction_patterns:
             raise ValueError("Correction will only be used when option is toggled.")
 
-        assert isinstance(
-            _corr_flows.index, pd.TimedeltaIndex
-        ), "Index needs to be Timedelta."
+        assert isinstance(_corr_flows.index, pd.TimedeltaIndex), (
+            "Index needs to be Timedelta."
+        )
 
         assert (
             _corr_flows.columns.str.contains(
@@ -254,11 +264,13 @@ class DualModel:
         pump_flows: pd.DataFrame | None = None,
         pipe_list: list[str] | None = None,
         temporal_resolution: str = "5 min",
-        #aggregation: LocalisationResultAggregation = "none",
+        # aggregation: LocalisationResultAggregation = "none",
     ) -> Any:
         # first check, further validation between dataframes in _get_data_patterns
         if not leak_flow.index.equals(heads.index):
-            raise ValueError("Index mismatch between provided head measurements and virtual flow.")
+            raise ValueError(
+                "Index mismatch between provided head measurements and virtual flow."
+            )
 
         # data patterns
         data_patterns = self._get_data_patterns(heads, inflows, pump_flows)
@@ -272,7 +284,9 @@ class DualModel:
         # native patterns
         self._process_base_patterns(simulation_start=data_patterns.first_valid_index())
 
-        aggregation = "none" # sadly, the detection algorithm is not flexible at this time
+        aggregation = (
+            "none"  # sadly, the detection algorithm is not flexible at this time
+        )
 
         # start localisation
         self.last_localisation = self.nw.run_localisation(
@@ -313,7 +327,7 @@ class DualModel:
 
         # any missing?
         if bool(_diff := (network_names - data_names)):
-            raise ValueError(f"No patterns for {kind}: {*_diff,} in provided data.")
+            raise ValueError(f"No patterns for {kind}: {(*_diff,)} in provided data.")
 
     def _get_data_patterns(
         self,
@@ -321,7 +335,9 @@ class DualModel:
         inflows: pd.DataFrame | None = None,
         pump_flows: pd.DataFrame | None = None,
     ) -> pd.DataFrame:
-        """Performs validation and returns merged data"""
+        """Performs validation and returns merged data
+        Heads are necessary, inflows and pump_flows are optional
+        """
 
         _heads = heads.copy()
         _heads.columns = [

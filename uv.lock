@@ -161,6 +161,15 @@ wheels = [
 ]
 
 [[package]]
+name = "directory-tree"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ba/48/7dbb436a54e0b727ba81ccb1bcf7875e875f826dcf43e01b9ad52726b179/directory_tree-1.0.0.tar.gz", hash = "sha256:d65b404d7e561db62e6321f36c612cd12da2e9fbe5cbae98da73ce14c0ec910d", size = 28347, upload-time = "2024-08-18T17:36:59.19Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4e/fb/047673ca107e735c0dd9e03811a6f0c8c22ed72d6db596134399580c80c5/directory_tree-1.0.0-py3-none-any.whl", hash = "sha256:2484ba5e9d35e087703913cc85e920f08b9b942859b9f5a0eae24699d3364734", size = 23001, upload-time = "2024-08-18T17:36:57.261Z" },
+]
+
+[[package]]
 name = "epyt"
 version = "2.3.5.0"
 source = { registry = "https://pypi.org/simple" }
@@ -216,6 +225,7 @@ name = "iole-dualmodel"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "directory-tree" },
     { name = "epyt" },
     { name = "ipykernel" },
     { name = "matplotlib" },
@@ -229,6 +239,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "directory-tree", specifier = ">=1.0.0" },
     { name = "epyt", specifier = ">=2.3.5.0" },
     { name = "ipykernel", specifier = ">=7.2.0" },
     { name = "matplotlib", specifier = ">=3.10.9" },

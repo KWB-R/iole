@@ -1,23 +1,21 @@
 from __future__ import annotations
-import os
-from contextlib import contextmanager
+
 import multiprocessing as mp
+import os
 import tempfile
-from itertools import count
 from collections import defaultdict
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from itertools import count
 from pathlib import Path
+from typing import Any, Callable, ClassVar, Dict, List, Literal, Never, Optional, Tuple
 from uuid import uuid4
 
-from dataclasses import dataclass, field
-from typing import Callable, List, Dict, Optional, Literal, Any, Never, Tuple, ClassVar
-
-import pandas as pd
 import numpy as np
-
+import pandas as pd
 from epyt import epanet
 
-from src.util import timer
-
+from ..util import timer
 
 SimulationKind = Literal["head", "pressure", "flow", "pump_flow"]
 SimulationTargets = Dict[SimulationKind, List[str]]
@@ -26,6 +24,7 @@ SimulationTargets = Dict[SimulationKind, List[str]]
 VIRTUAL_FLOW_PATTERN_NAME = "virtual_flow"
 
 __DEBUG = False
+
 
 def _to_offset(s: str) -> Tuple[bool, pd.DateOffset]:
     try:
@@ -136,7 +135,6 @@ class PatternPertArgs:
 
 @dataclass
 class DynamicBaseDemandPerturbation:
-
     initial_network: epanet
     perturbation_percentage: float
     exclude_junctions: list[str] = field(default_factory=list)
@@ -277,9 +275,9 @@ class Simulator:
         """
         if epyt_nw is provided, skips reading the network
         """
-        assert (inp_path is not None) != (
-            epyt_nw is not None
-        ), "One of path or network has to be provided."
+        assert (inp_path is not None) != (epyt_nw is not None), (
+            "One of path or network has to be provided."
+        )
         # load network
         if epyt_nw is None:
             d = epanet(inp_path, display_msg=False, display_warnings=False)
@@ -290,7 +288,7 @@ class Simulator:
             for method, args in self.solver_options.items():
                 try:
                     getattr(d, method)(*args)
-                    print(f"Applied {method}({*args,}) option.")
+                    print(f"Applied {method}({(*args,)}) option.")
                 except Exception as e:
                     print(
                         f"Unable to apply option {method} with args {args} to solver.\n{e}"
@@ -395,7 +393,6 @@ class Simulator:
 
         tstep = 1
         while tstep > 0:
-
             t = d.runHydraulicAnalysis()
 
             if t % pstep == 0:
@@ -447,6 +444,7 @@ class Simulator:
 
 
 LocalisationResultAggregation = Literal["none", "partial", "total", "abs_total"]
+
 
 @dataclass
 class Localiser:
@@ -509,8 +507,9 @@ class Localiser:
 
         # 2. data matches each other?
         if not self.patterns.index.equals(self.virtual_flow.index):
-            raise Exception(f"Provided virtual flow index does not match provided data index.")
-
+            raise Exception(
+                f"Provided virtual flow index does not match provided data index."
+            )
 
     def run(self, temporal_resolution: str = "1 h") -> pd.Series:
         """
@@ -529,7 +528,9 @@ class Localiser:
         """
         d = self._prepare_network(temporal_resolution)
 
-        d.saveInputFile(r"C:\Users\jkoslo\Documents\iOLE (lok)\programming\iole_current\data\output\temp\localisation\_test.inp")
+        d.saveInputFile(
+            r"C:\Users\jkoslo\Documents\iOLE (lok)\programming\iole_current\data\output\temp\localisation\_test.inp"
+        )
 
         if self.pipes_to_test is None:
             self.pipes_to_test = [p for p in d.getLinkPipeNameID()]
@@ -666,9 +667,9 @@ class Localiser:
             _in_nw_not_in_df = network_patterns - dataframe_patterns
             _in_df_not_in_nw = dataframe_patterns - network_patterns
             if _in_nw_not_in_df:
-                print(f"Missing in provided pattern data: {*_in_nw_not_in_df,}")
+                print(f"Missing in provided pattern data: {(*_in_nw_not_in_df,)}")
             if _in_df_not_in_nw:
-                print(f"Missing in provided network patterns: {*_in_df_not_in_nw,}")
+                print(f"Missing in provided network patterns: {(*_in_df_not_in_nw,)}")
             raise Exception(f"Pattern IDs do not match.")
 
     @staticmethod
@@ -702,14 +703,11 @@ class Localiser:
 
 # Process workers
 _WORKER = None  # global container for worker persistence
-_DEBUG_INP_FOLDER = os.path.normpath(
-    r"data\output\temp\localisation"
-)
+_DEBUG_INP_FOLDER = os.path.normpath(r"data\output\temp\localisation")
 
 
 @dataclass
 class _LocalisationWorker:
-
     debug_folder: ClassVar[os.PathLike] = _DEBUG_INP_FOLDER
     debug: ClassVar[bool] = False
 
@@ -748,12 +746,12 @@ class _LocalisationWorker:
                 epyt_nw=nw,
                 simulation_targets={
                     "flow": self.virtual_pipes,
-                    #"head": self.pressure_nodes,
+                    # "head": self.pressure_nodes,
                 },
             )
 
             vf = sim_result["flow"]
-            #heads = sim_result["head"]      
+            # heads = sim_result["head"]
 
             # match self.aggregation:
             #     case "none":
@@ -779,7 +777,7 @@ class _LocalisationWorker:
         # if all pipes are tested, weakest signal is best guess
         vf = vf.mean().abs().mean()
 
-        return vf#, heads
+        return vf  # , heads
 
     @contextmanager
     def _live_insert_leak_node_epyt(

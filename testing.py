@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 
-from src.api import DualModel, DualModelOptions
+from src.dual_model_api.api import DualModel, DualModelOptions
 
 with open(
     r"data\scenario_configurations\all_sensor_scenarios_0_weighted.json", "r"
