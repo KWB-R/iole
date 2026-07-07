@@ -434,12 +434,15 @@ class Simulator:
     def _cleanup_sim_dir(inp_path):
         filename = os.path.splitext(os.path.basename(inp_path))[0]
         directory = os.path.dirname(inp_path)
+        inp_mtime = os.path.getmtime(inp_path)
 
         for file in os.listdir(directory):
-            if file.startswith(filename) and (
-                os.path.basename(file) != os.path.basename(inp_path)
+            _path = os.path.join(directory, file)
+            if (
+                file.startswith(filename)
+                and file != os.path.basename(inp_path)
+                and os.path.getmtime(_path) >= inp_mtime
             ):
-                _path = os.path.join(directory, file)
                 os.remove(_path)
 
 

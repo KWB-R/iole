@@ -211,6 +211,7 @@ class DualModel:
         inflows: pd.DataFrame | None = None,
         pump_flows: pd.DataFrame | None = None,
         aggregate: bool = True,
+        folder: Literal["temporary"] | str = "temporary",
     ) -> pd.DataFrame | pd.Series | Never:
         """Takes measurements as input and calculates virtual flows
         - will create pattern dataframe and assign to network elements
@@ -245,6 +246,7 @@ class DualModel:
         vflow = self.nw.run_simulation(
             simulation_targets={"flow": self.nw.virtual_pipes},
             solver_options={"setTimeSimulationDuration": [simulation_duration_seconds]},
+            folder=folder,
         )["flow"]
 
         # reindex to original timestamps
