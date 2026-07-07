@@ -255,12 +255,6 @@ class Simulator:
 
     solver_options: Optional[Dict[str, List[Any]]] = None
 
-    @property
-    def _temp_files_flag(self):
-        if self.EN_USE_TEMP_FILES:
-            return 1
-        return 0
-
     @timer
     def run_simulation(
         self,
@@ -386,7 +380,7 @@ class Simulator:
 
         # run simulation
         d.openHydraulicAnalysis()
-        d.initializeHydraulicAnalysis(self._temp_files_flag)
+        d.initializeHydraulicAnalysis(int(self.EN_USE_TEMP_FILES))
 
         tl = []
         pstep = d.getTimePatternStep()
