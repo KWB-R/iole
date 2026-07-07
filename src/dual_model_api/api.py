@@ -223,6 +223,11 @@ class DualModel:
               weekday and time where the measurement took place
         - virtual flow:
             - reindexed to heads.index so the timestamps are matching
+
+        Args:
+            folder: if "temporary" will work in tempdir and safely delete after, if str saves network that was simulated at that location
+                    cleanup is still being done, deleting temporary inp and txt files that were created after the inp file
+                    (it is not impossible that this process deletes other files, edge cases exist. Use an empty folder!)
         """
 
         # data: validate/get patterns + assign

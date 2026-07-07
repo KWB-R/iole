@@ -154,8 +154,93 @@ class VirtualReservoir:
         return vrids, vpids
 
 
+class PerturbationMixin:
+    def __init__(self):
+        self._original_demands = {}
+        self._original_roughness = {}
+
+    def apply_uniform_roughness_perturbation(
+        self, pctg: float = 0.3, seed: int = 10825
+    ) -> Self:
+        rng = np.random.default_rng(seed)
+
+        pipes = on.get_pipes(self.nw)
+
+        n = len(pipes)
+        mul = iter(np.round(rng.uniform(1 - pctg, 1 + pctg, n), 4))
+
+        for pipe in pipes:
+            if pipe.id not in self._original_roughness:
+                self._original_roughness[pipe.id] = pipe.roughness
+
+            pipe.roughness = pipe.roughness * next(mul)
+
+        return self
+
+    def apply_uniform_base_demand_perturbation(
+        self, pctg: float = 0.3, seed: int = 10825
+    ) -> Self:
+        rng = np.random.default_rng(seed)
+
+        def get_muls(n: int) -> list[float]:
+            return rng.uniform(1 - pctg, 1 + pctg, n)
+
+        nodes = on.get_junctions(self.nw)
+
+        for node in nodes:
+            if node.id not in self._original_demands:
+                self._original_demands[node.id] = node.demand
+            _demands = node.demand
+            if isinstance(_demands, (float, int)):
+                mul = get_muls(1)
+                node.demand *= mul
+            elif isinstance(_demands, (list, np.ndarray)):
+                muls = get_muls(len(_demands))
+                node.demand = [float(m * d) for m, d in zip(muls, _demands)]
+            else:
+                raise TypeError(f"Unexpected demand type: {type(_demands)}.")
+
+        return self
+
+    def apply_multiplicative_roughness_perturbation(self, mul: float = 1.3) -> Self:
+        for pipe in on.get_pipes(self.nw):
+            if pipe.id not in self._original_roughness:
+                self._original_roughness[pipe.id] = pipe.roughness
+
+            pipe.roughness *= mul
+
+        return self
+
+    def apply_multiplicative_base_demand_perturbation(self, mul: float = 1.3) -> Self:
+        for node in on.get_junctions(self.nw):
+            if node.id not in self._original_demands:
+                self._original_demands[node.id] = node.demand
+
+            _demands = node.demand
+            if isinstance(_demands, (float, int)):
+                node.demand *= mul
+            elif isinstance(_demands, (list, np.ndarray)):
+                node.demand = [float(mul * d) for d in _demands]
+            else:
+                raise TypeError(f"Unexpected demand type: {type(_demands)}.")
+
+        return self
+
+    def restore_original_demands(self) -> Self:
+        for nid, dem in self._original_demands.items():
+            node = on.get_junction(self.nw, nid)
+            node.demand = dem
+        return self
+
+    def restore_original_roughness(self) -> Self:
+        for pid, rgh in self._original_roughness.items():
+            pipe = on.get_pipe(self.nw, pid)
+            pipe.roughness = rgh
+        return self
+
+
 @dataclass
-class HydraulicNetwork:
+class HydraulicNetwork(PerturbationMixin):
     """Class that holds the on.Network
     contains methods that change topology to
     convert into _DualModel
@@ -169,11 +254,11 @@ class HydraulicNetwork:
     """
 
     source_path: os.PathLike | None = field(default=None)
-    nw: on.Network | None = field(default=None)
+    nw: on.Network | None = field(default=None, repr=False)
 
-    base_patterns: pd.DataFrame | None = field(default=None)
-    pump_demands: list[str] = field(default_factory=list, init=False)
-    inflow_pipes: list[str] = field(default_factory=list, init=True)
+    base_patterns: pd.DataFrame | None = field(default=None, repr=False)
+    pump_demands: list[str] = field(default_factory=list, init=False, repr=False)
+    inflow_pipes: list[str] = field(default_factory=list, init=True, repr=False)
 
     def __post_init__(self):
         if (self.source_path is None) and (self.nw is None):
