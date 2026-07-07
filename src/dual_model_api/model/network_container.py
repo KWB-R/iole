@@ -155,10 +155,6 @@ class VirtualReservoir:
 
 
 class PerturbationMixin:
-    def __init__(self):
-        self._original_demands = {}
-        self._original_roughness = {}
-
     def apply_uniform_roughness_perturbation(
         self, pctg: float = 0.3, seed: int = 10825
     ) -> Self:
@@ -192,7 +188,7 @@ class PerturbationMixin:
                 self._original_demands[node.id] = node.demand
             _demands = node.demand
             if isinstance(_demands, (float, int)):
-                mul = get_muls(1)
+                mul = get_muls(1)[0]  # unwrap!
                 node.demand *= mul
             elif isinstance(_demands, (list, np.ndarray)):
                 muls = get_muls(len(_demands))
@@ -259,6 +255,13 @@ class HydraulicNetwork(PerturbationMixin):
     base_patterns: pd.DataFrame | None = field(default=None, repr=False)
     pump_demands: list[str] = field(default_factory=list, init=False, repr=False)
     inflow_pipes: list[str] = field(default_factory=list, init=True, repr=False)
+
+    _original_demands: dict[str, float | list[float]] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _original_roughness: dict[str, float] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def __post_init__(self):
         if (self.source_path is None) and (self.nw is None):
